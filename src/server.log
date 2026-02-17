@@ -1,0 +1,6 @@
+/Users/hashim/Desktop/assignment-3-building-a-webserver-updated-haiderali077/src/webserver.py:48: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  timestamp = datetime.utcfromtimestamp(timestamp)
+/Users/hashim/Desktop/assignment-3-building-a-webserver-updated-haiderali077/src/webserver.py:46: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow()
+/Users/hashim/Desktop/assignment-3-building-a-webserver-updated-haiderali077/src/webserver.py:216: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  file_date = datetime.utcfromtimestamp(lastModTime)
