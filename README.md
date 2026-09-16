@@ -88,7 +88,7 @@ src/
 
 ### Requirements
 
-- Python 3.6+
+- Python 3.11+ on Linux or macOS
 - No external dependencies (uses only standard library)
 
 ### Running the Server
@@ -159,6 +159,9 @@ directory using an absolute script path. From the repository root,
 ## Testing
 
 Run the automated regression tests from the repository root:
+
+The same suite runs on Python 3.11 and 3.13 through
+[GitHub Actions](.github/workflows/tests.yml) for pushes and pull requests.
 
 ```bash
 python3 -m unittest discover -s tests -v
