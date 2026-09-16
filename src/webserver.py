@@ -16,6 +16,7 @@ if __package__:
     from .transport import BodyStream, SocketReader, send_response
     from .workers import BoundedPool
     from .application import Application
+    from .events import Events
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
@@ -24,20 +25,36 @@ else:
     from transport import BodyStream, SocketReader, send_response
     from workers import BoundedPool
     from application import Application
+    from events import Events
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 
 def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts(),
-                      max_requests=100, stop_event=None, application=None):
+                      max_requests=100, stop_event=None, application=None, events=None):
     """Own one accepted socket: receive, dispatch, send, and close."""
     response_started = False
     waiting_for_idle = False
     reader = SocketReader(connection)
     application = application or Application(document_root)
+    events = events or Events()
+    request = response = None
+    started = time.monotonic()
+
+    def record(status, outcome, upstream=None):
+        if upstream is None and response is not None:
+            upstream = response.upstream_seconds
+            streamed = getattr(response.body, "duration", None)
+            if upstream is not None and streamed is not None:
+                upstream += streamed
+        events.emit("access", method=request.method if request else None, path=request.path if request else None,
+                    status=status, duration_seconds=round(time.monotonic() - started, 6),
+                    upstream_seconds=upstream, outcome=outcome)
     try:
         for number in range(max_requests):
+            request = response = None
+            started = time.monotonic()
             response_started = False
             if number and not reader.buffer:
                 waiting_for_idle = True
@@ -47,6 +64,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
                     return
                 reader.buffer.extend(data)
                 waiting_for_idle = False
+                started = time.monotonic()
             header = reader.read_until(b"\r\n\r\n", limits.header_bytes, timeout=timeouts.header)
             if not header:
                 return
@@ -76,9 +94,13 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             response_started = True
             connection.settimeout(timeouts.write)
             send_response(connection, response, suppress_body=request.method == "HEAD")
+            record(response.status, "complete")
             if not keep_alive:
                 return
     except HTTPError as error:
+        events.emit("error", message=str(error), status=error.status, response_started=response_started)
+        record(response.status if response_started and response else error.status, "incomplete" if response_started else "error",
+               getattr(error, "upstream_seconds", None))
         if response_started:
             return
         response = error_response(error.status)
@@ -88,6 +110,9 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
         except OSError:
             pass
     except socket.timeout:
+        if not waiting_for_idle:
+            events.emit("error", message="Socket deadline exceeded", response_started=response_started)
+            record(response.status if response_started and response else 408, "incomplete" if response_started else "error")
         if not response_started and not waiting_for_idle:
             try:
                 connection.settimeout(timeouts.write)
@@ -95,9 +120,13 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             except OSError:
                 pass
     except (OSError, ValueError) as error:
+        events.emit("error", message=str(error), response_started=response_started)
+        record(response.status if response_started and response else None, "incomplete")
         # A failed connection cannot reliably receive a file error response.
         print("Connection error: {}".format(error), file=sys.stderr)
     except Exception as error:
+        events.emit("error", message=str(error), response_started=response_started)
+        record(response.status if response_started and response else 500, "incomplete" if response_started else "error")
         print("Handler error: {}".format(error), file=sys.stderr)
         if not response_started:
             try:
@@ -113,7 +142,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
 
 def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16, *,
                host="127.0.0.1", limits=Limits(), timeouts=Timeouts(), max_requests=100,
-               shutdown_timeout=2.0, stop_event=None, upstream=None, proxy_options=None):
+               shutdown_timeout=2.0, stop_event=None, upstream=None, proxy_options=None, access_log=None, error_log=None):
     """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
@@ -129,12 +158,12 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
     def worker(connection):
         try:
             handle_connection(connection, document_root, limits, timeouts,
-                              max_requests, stop_event, application)
+                              max_requests, stop_event, application, events)
         finally:
             with lock:
                 connections.discard(connection)
 
-    with BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    with Events(access_log, error_log) as events, BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((host, port))
         listener.listen(max(1, workers + queue_size))
@@ -185,6 +214,8 @@ def main(argv):
     parser.add_argument("--upstream", help="HTTP backend origin for /api/*")
     parser.add_argument("--upstream-connect-timeout", type=float, default=2.0)
     parser.add_argument("--upstream-response-timeout", type=float, default=10.0)
+    parser.add_argument("--access-log", type=Path)
+    parser.add_argument("--error-log", type=Path)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--queue-size", type=int, default=16)
     parser.add_argument("--max-headers", type=int, default=32768)
@@ -205,7 +236,8 @@ def main(argv):
                    timeouts=Timeouts(args.header_timeout, args.body_timeout, args.write_timeout, args.idle_timeout),
                    max_requests=args.max_requests, shutdown_timeout=args.shutdown_timeout, stop_event=stop,
                    upstream=args.upstream, proxy_options={"connect_timeout": args.upstream_connect_timeout,
-                                                        "response_timeout": args.upstream_response_timeout})
+                                                        "response_timeout": args.upstream_response_timeout},
+                   access_log=args.access_log, error_log=args.error_log)
     except ValueError as error:
         print(error, file=sys.stderr)
         sys.exit(2)

@@ -20,6 +20,7 @@ class HTTPResponse(NamedTuple):
     status: int
     headers: Dict[str, str]
     body: bytes
+    upstream_seconds: float | None = None
 
     def header_bytes(self):
         """Serialize the status line and headers, ending with a blank line."""

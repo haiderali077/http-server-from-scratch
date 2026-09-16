@@ -102,10 +102,13 @@ def response_chunks(reader, request, status, headers, timeout=10):
 class UpstreamBody:
     def __init__(self, connection, chunks):
         self.connection, self.chunks = connection, chunks
+        self.started = time.monotonic()
+        self.duration = None
     def __iter__(self):
         yield from self.chunks
     def close(self):
         self.connection.close()
+        self.duration = time.monotonic() - self.started
 
 
 class ProxyFailure(HTTPError):
@@ -125,14 +128,19 @@ class Proxy:
         self.authority = f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
 
     def forward(self, request, peer=None):
+        started = time.monotonic()
         try:
-            return self._forward(request, peer)
+            return self._forward(request, peer)._replace(upstream_seconds=time.monotonic() - started)
         except socket.timeout as error:
-            raise ProxyFailure("Upstream timed out", 504) from error
+            failure = ProxyFailure("Upstream timed out", 504)
+            failure.upstream_seconds = time.monotonic() - started
+            raise failure from error
         except (OSError, ValueError) as error:
             if isinstance(error, HTTPError):
                 raise
-            raise ProxyFailure("Upstream connection or protocol failure", 502) from error
+            failure = ProxyFailure("Upstream connection or protocol failure", 502)
+            failure.upstream_seconds = time.monotonic() - started
+            raise failure from error
 
     def _forward(self, request, peer=None):
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
