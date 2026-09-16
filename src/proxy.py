@@ -5,11 +5,11 @@ from urllib.parse import quote, urlsplit
 
 if __package__:
     from .http_response import build_response
-    from .transport import SocketReader
+    from .transport import BodyStream, SocketReader
     from .http_request import TOKEN
 else:
     from http_response import build_response
-    from transport import SocketReader
+    from transport import BodyStream, SocketReader
     from http_request import TOKEN
 
 
@@ -65,21 +65,45 @@ def response_header(reader, timeout=5):
 
 
 def response_body(reader, request, status, headers):
+    return b"".join(response_chunks(reader, request, status, headers))
+
+
+def response_chunks(reader, request, status, headers, timeout=10):
     if request.method == "HEAD" or status in (204, 304):
-        return b""
+        return
     if "transfer-encoding" in headers:
-        return reader.read_chunked(64 * 1024 * 1024, 10)
+        yield from reader.iter_chunked(64 * 1024 * 1024, timeout)
+        return
     if "content-length" in headers:
-        return reader.read_exact(int(headers["content-length"]), 64 * 1024 * 1024, 10)
-    body = bytearray(reader.buffer)
+        yield from reader.iter_exact(int(headers["content-length"]), 64 * 1024 * 1024, timeout)
+        return
+    import time
+    deadline = time.monotonic() + timeout
+    total = len(reader.buffer)
+    if reader.buffer:
+        yield bytes(reader.buffer)
     reader.buffer.clear()
     while True:
-        data = reader.connection.recv(65536)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout("Upstream body deadline exceeded")
+        reader.connection.settimeout(remaining)
+        data = reader.connection.recv(16384)
         if not data:
-            return bytes(body)
-        body.extend(data)
-        if len(body) > 64 * 1024 * 1024:
+            return
+        total += len(data)
+        if total > 64 * 1024 * 1024:
             raise ValueError("Upstream body exceeds limit")
+        yield data
+
+
+class UpstreamBody:
+    def __init__(self, connection, chunks):
+        self.connection, self.chunks = connection, chunks
+    def __iter__(self):
+        yield from self.chunks
+    def close(self):
+        self.connection.close()
 
 
 class Proxy:
@@ -95,7 +119,8 @@ class Proxy:
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
         if request.query:
             path += "?" + request.query
-        with socket.create_connection((self.host, self.port), timeout=5) as connection:
+        connection = socket.create_connection((self.host, self.port), timeout=5)
+        try:
             fields = end_to_end_headers(request.headers)
             fields.pop("host", None)
             fields.pop("content-length", None)
@@ -106,16 +131,28 @@ class Proxy:
             fields["X-Forwarded-Proto"] = "http"
             if peer:
                 fields["X-Forwarded-For"] = peer[0]
-            fields.update({"Host": self.authority, "Connection": "close", "Content-Length": str(len(request.body))})
+            fields.update({"Host": self.authority, "Connection": "close"})
+            chunked = "transfer-encoding" in request.headers
+            fields["Transfer-Encoding" if chunked else "Content-Length"] = "chunked" if chunked else request.headers.get("content-length", str(len(request.body)) if isinstance(request.body, bytes) else "0")
             message = f"{request.method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
             connection.sendall(message.encode("iso-8859-1"))
-            if request.body:
-                connection.sendall(request.body)
+            chunks = [request.body] if isinstance(request.body, bytes) else request.body
+            for chunk in chunks:
+                if chunk:
+                    connection.sendall(f"{len(chunk):x}\r\n".encode("ascii") + chunk + b"\r\n" if chunked else chunk)
+            if chunked:
+                connection.sendall(b"0\r\n\r\n")
             reader = SocketReader(connection)
             status, headers = response_header(reader)
-            body = response_body(reader, request, status, headers)
             forwarded = {name.title(): value for name, value in end_to_end_headers(headers).items() if name not in {"content-length", "server", "date"}}
-            response = build_response(status, body, forwarded)
-            if request.method == "HEAD" and "content-length" in headers:
+            response = build_response(status, headers=forwarded)
+            if "content-length" in headers and status != 204 and status != 304:
                 response.headers["Content-Length"] = headers["content-length"]
-            return response
+            elif request.method != "HEAD" and status not in (204, 304):
+                response.headers.pop("Content-Length", None)
+                response.headers["Transfer-Encoding"] = "chunked"
+            body = UpstreamBody(connection, response_chunks(reader, request, status, headers))
+            return response._replace(body=body)
+        except BaseException:
+            connection.close()
+            raise

@@ -13,7 +13,7 @@ if __package__:
     from .http_response import error_response
     from .limits import Limits, Timeouts
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
-    from .transport import SocketReader, send_response
+    from .transport import BodyStream, SocketReader, send_response
     from .workers import BoundedPool
     from .application import Application
 else:
@@ -21,7 +21,7 @@ else:
     from http_response import error_response
     from limits import Limits, Timeouts
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
-    from transport import SocketReader, send_response
+    from transport import BodyStream, SocketReader, send_response
     from workers import BoundedPool
     from application import Application
 
@@ -51,7 +51,11 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             if not header:
                 return
             request = parse_request(header.decode("iso-8859-1"), limits.body_bytes)
-            if "transfer-encoding" in request.headers:
+            if application.is_proxy(request):
+                chunks = (reader.iter_chunked(limits.body_bytes, timeouts.body) if "transfer-encoding" in request.headers
+                          else reader.iter_exact(int(request.headers.get("content-length", "0")), limits.body_bytes, timeouts.body))
+                body = BodyStream(chunks)
+            elif "transfer-encoding" in request.headers:
                 body = reader.read_chunked(limits.body_bytes, timeouts.body)
             else:
                 body = reader.read_exact(int(request.headers.get("content-length", "0")),
@@ -66,6 +70,8 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             except (OSError, AttributeError):
                 peer = None
             response = application.dispatch(request, peer)
+            if isinstance(body, BodyStream) and not body.complete:
+                keep_alive = False
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True
             connection.settimeout(timeouts.write)
@@ -73,6 +79,8 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             if not keep_alive:
                 return
     except HTTPError as error:
+        if response_started:
+            return
         response = error_response(error.status)
         try:
             connection.settimeout(timeouts.write)

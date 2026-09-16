@@ -1,6 +1,7 @@
 import unittest
 from src.proxy import response_header, response_body
 from src.transport import SocketReader
+from src.proxy import response_chunks
 from src.http_request import HTTPRequest
 
 
@@ -37,3 +38,11 @@ class UpstreamProtocolTests(unittest.TestCase):
     def test_cookie_fields_remain_separate(self):
         _, fields, _ = self.decode(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n")
         self.assertEqual(fields["set-cookie"], ["a=1", "b=2"])
+
+    def test_chunk_payloads_are_bounded(self):
+        body = b"x" * 100000
+        reader = SocketReader(BytesSocket(b"186a0\r\n" + body + b"\r\n0\r\n\r\n"))
+        request = HTTPRequest("GET", "/", "", "HTTP/1.1", {})
+        chunks = list(response_chunks(reader, request, 200, {"transfer-encoding": "chunked"}))
+        self.assertEqual(b"".join(chunks), body)
+        self.assertLessEqual(max(map(len, chunks)), 16384)

@@ -34,6 +34,9 @@ class Application:
             return handler(request)
         return serve_file(request, self.document_root)
 
+    def is_proxy(self, request):
+        return self.proxy is not None and (request.path == "/api" or request.path.startswith("/api/"))
+
     def echo(self, request):
         return build_response(200, request.body, {"Content-Type": "application/octet-stream"})
 

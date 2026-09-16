@@ -11,17 +11,38 @@ else:
 
 def send_response(connection, response, suppress_body=False):
     """Transmit complete buffers; a successful send() alone is not sufficient."""
-    connection.sendall(response.header_bytes())
-    if suppress_body:
-        return
-    if response.headers.get("Transfer-Encoding") == "chunked":
+    try:
+        connection.sendall(response.header_bytes())
+        if suppress_body or response.status in (204, 304):
+            return
         chunks = [response.body] if isinstance(response.body, bytes) else response.body
+        chunked = response.headers.get("Transfer-Encoding") == "chunked"
+        sent = 0
+        expected = int(response.headers["Content-Length"]) if "Content-Length" in response.headers else None
         for chunk in chunks:
             if chunk:
-                connection.sendall(f"{len(chunk):x}\r\n".encode("ascii") + chunk + b"\r\n")
-        connection.sendall(b"0\r\n\r\n")
-    elif response.body:
-        connection.sendall(response.body)
+                sent += len(chunk)
+                if expected is not None and sent > expected:
+                    raise ValueError("Response exceeds declared length")
+                connection.sendall(f"{len(chunk):x}\r\n".encode("ascii") + chunk + b"\r\n" if chunked else chunk)
+        if expected is not None and sent != expected:
+            raise ValueError("Response shorter than declared length")
+        if chunked:
+            connection.sendall(b"0\r\n\r\n")
+    finally:
+        close = getattr(response.body, "close", None)
+        if close:
+            close()
+
+
+class BodyStream:
+    """Track whether forwarding consumed the complete downstream body."""
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.complete = False
+    def __iter__(self):
+        yield from self.chunks
+        self.complete = True
 
 
 class SocketReader:
@@ -70,6 +91,35 @@ class SocketReader:
         result = bytes(self.buffer[:size])
         del self.buffer[:size]
         return result
+
+    def iter_exact(self, size, limit=1048576, timeout=10.0):
+        if not 0 <= size <= limit:
+            raise HTTPError("Body exceeds configured limit", 413)
+        deadline = time.monotonic() + timeout
+        while size:
+            amount = min(size, 16384)
+            yield self.read_exact(amount, limit, max(0, deadline - time.monotonic()))
+            size -= amount
+
+    def iter_chunked(self, limit=1048576, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        total = 0
+        while True:
+            line = self.read_until(b"\r\n", 128, 400, max(0, deadline - time.monotonic()))
+            text = line[:-2].partition(b";")[0]
+            if not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", text):
+                raise HTTPError("Invalid chunk size")
+            size = int(text, 16)
+            total += size
+            if total > limit:
+                raise HTTPError("Decoded body exceeds configured limit", 413)
+            if not size:
+                if self.read_until(b"\r\n", 32768, 400, max(0, deadline - time.monotonic())) != b"\r\n":
+                    raise HTTPError("Trailers are unsupported")
+                return
+            yield from self.iter_exact(size, limit, max(0, deadline - time.monotonic()))
+            if self.read_exact(2, 2, max(0, deadline - time.monotonic())) != b"\r\n":
+                raise HTTPError("Missing chunk terminator")
 
     def read_chunked(self, limit=1048576, timeout=10.0):
         deadline = time.monotonic() + timeout
