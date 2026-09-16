@@ -2,6 +2,7 @@
 
 import os
 import hashlib
+import gzip
 from pathlib import Path
 import re
 from datetime import datetime, timezone
@@ -9,8 +10,10 @@ from email.utils import parsedate_to_datetime
 
 if __package__:
     from .http_response import build_response, error_response, format_http_date
+    from .encoding import qualities
 else:
     from http_response import build_response, error_response, format_http_date
+    from encoding import qualities
 
 
 CONTENT_TYPES = {
@@ -122,8 +125,15 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT, cache=None):
             return error_response(404)
 
         stat = filename.stat()
+        gzip_q, identity_q = qualities(request.headers.get("accept-encoding"))
+        can_gzip = stat.st_size <= 1048576
+        compressed = can_gzip and gzip_q > 0 and gzip_q >= identity_q
+        if not compressed and identity_q == 0:
+            return error_response(406, {"Vary": "Accept-Encoding"})
         last_modified = stat.st_mtime
-        headers = {"Last-Modified": format_http_date(last_modified), "ETag": file_etag(stat)}
+        headers = {"Last-Modified": format_http_date(last_modified), "ETag": file_etag(stat, "gzip" if compressed else "identity"), "Vary": "Accept-Encoding"}
+        if compressed:
+            headers["Content-Encoding"] = "gzip"
         condition = request.headers.get("if-none-match")
         unchanged = (etag_matches(condition, headers["ETag"]) if condition is not None
                      else is_not_modified(last_modified, request.headers.get("if-modified-since")))
@@ -131,7 +141,7 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT, cache=None):
             return build_response(304, headers=headers)
 
         headers["Content-Type"] = get_content_type(filename)
-        if request.method == "HEAD":
+        if request.method == "HEAD" and not compressed:
             response = build_response(200, headers=headers)
             response.headers["Content-Length"] = str(os.path.getsize(filename))
             return response
@@ -146,6 +156,12 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT, cache=None):
                 raise OSError("File changed during cache fill")
             return body
         body = cache.get((str(filename), "identity"), file_signature(stat), load) if cache else load()
+        if compressed:
+            body = gzip.compress(body, mtime=0)
+        if request.method == "HEAD":
+            response = build_response(200, headers=headers)
+            response.headers["Content-Length"] = str(len(body))
+            return response
         return build_response(200, body, headers)
     except PathOutsideDocumentRoot:
         return error_response(403)
