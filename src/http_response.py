@@ -56,3 +56,11 @@ def error_response(status, headers=None):
     if headers:
         response_headers.update(headers)
     return build_response(status, body, response_headers)
+
+
+def chunked_response(chunks, headers=None):
+    """Represent a streamed body without advertising a fixed length."""
+    response = build_response(200, headers=headers)
+    response.headers.pop("Content-Length")
+    response.headers["Transfer-Encoding"] = "chunked"
+    return response._replace(body=chunks)

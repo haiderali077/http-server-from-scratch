@@ -44,13 +44,16 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             if not header:
                 return
             request = parse_request(header.decode("iso-8859-1"), limits.body_bytes)
-            body = reader.read_exact(int(request.headers.get("content-length", "0")),
-                                     limits.body_bytes, timeouts.body)
+            if "transfer-encoding" in request.headers:
+                body = reader.read_chunked(limits.body_bytes, timeouts.body)
+            else:
+                body = reader.read_exact(int(request.headers.get("content-length", "0")),
+                                         limits.body_bytes, timeouts.body)
             request = request._replace(body=body)
             connection_tokens = {value.strip().lower() for value in request.headers.get("connection", "").split(",")}
             keep_alive = (request.version == "HTTP/1.1" and
                           "close" not in connection_tokens and
-                          "transfer-encoding" not in request.headers and number < 99)
+                          number < 99)
             response = serve_file(request, document_root)
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True

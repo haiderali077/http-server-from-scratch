@@ -1,6 +1,7 @@
 """Buffered socket reads: TCP delivers a stream, not whole HTTP messages."""
 import socket
 import time
+import re
 
 if __package__:
     from .http_request import HTTPError
@@ -11,7 +12,15 @@ else:
 def send_response(connection, response, suppress_body=False):
     """Transmit complete buffers; a successful send() alone is not sufficient."""
     connection.sendall(response.header_bytes())
-    if response.body and not suppress_body:
+    if suppress_body:
+        return
+    if response.headers.get("Transfer-Encoding") == "chunked":
+        chunks = [response.body] if isinstance(response.body, bytes) else response.body
+        for chunk in chunks:
+            if chunk:
+                connection.sendall(f"{len(chunk):x}\r\n".encode("ascii") + chunk + b"\r\n")
+        connection.sendall(b"0\r\n\r\n")
+    elif response.body:
         connection.sendall(response.body)
 
 
@@ -61,3 +70,22 @@ class SocketReader:
         result = bytes(self.buffer[:size])
         del self.buffer[:size]
         return result
+
+    def read_chunked(self, limit=1048576, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        body = bytearray()
+        while True:
+            line = self.read_until(b"\r\n", 128, 400, max(0, deadline - time.monotonic()))
+            size_text = line[:-2].partition(b";")[0]
+            if not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", size_text):
+                raise HTTPError("Invalid chunk size")
+            size = int(size_text, 16)
+            if size > limit - len(body):
+                raise HTTPError("Decoded body exceeds configured limit", 413)
+            if not size:
+                if self.read_until(b"\r\n", 32768, 400, max(0, deadline - time.monotonic())) != b"\r\n":
+                    raise HTTPError("Request trailers are not supported")
+                return bytes(body)
+            body.extend(self.read_exact(size, limit, max(0, deadline - time.monotonic())))
+            if self.read_exact(2, 2, max(0, deadline - time.monotonic())) != b"\r\n":
+                raise HTTPError("Missing chunk terminator")
