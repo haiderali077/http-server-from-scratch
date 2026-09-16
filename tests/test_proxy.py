@@ -47,3 +47,10 @@ class ProxyTests(unittest.TestCase):
         for url in ["https://host", "http://user@host", "http://host/path", "http://host?x=1"]:
             with self.assertRaises(ValueError):
                 Proxy(url)
+
+    def test_prefix_boundaries(self):
+        with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
+            for path in ("/api", "/api/", "/api/a%20b"):
+                self.assertIn(b"200 OK", server.exchange(request_bytes(path)))
+            self.assertEqual([r[1] for r in backend.server.seen], ["/", "/", "/a%20b"])
+            self.assertIn(b"404 Not Found", server.exchange(request_bytes("/apiculture")))
