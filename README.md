@@ -62,7 +62,7 @@ curl --data-binary 'backend echo' http://127.0.0.1:6789/api/echo
 | `--header-timeout`, `--body-timeout` | 5 s headers, 10 s body |
 | `--write-timeout`, `--idle-timeout` | 5 s per write, 2 s between requests |
 | `--shutdown-timeout` | 2 s drain, then close remaining clients |
-| `--upstream` | Optional HTTP origin for API routes |
+| `--upstream` | Optional origin; repeat for [round-robin and health checks](docs/BACKENDS.md) |
 | `--upstream-connect-timeout`, `--upstream-response-timeout` | 2 s connect; 10 s header/body phases |
 | `--upstream-pool-size` | 0 disables backend reuse; positive value caps exclusive backend leases |
 | `--cache-bytes` | 8 MiB shared payload budget; 0 disables storage |

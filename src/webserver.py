@@ -229,7 +229,7 @@ def main(argv):
     parser.add_argument("-p", "--port", type=int, default=6789)
     parser.add_argument("-d", "--document-root", type=Path, default=DEFAULT_DOCUMENT_ROOT)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--upstream", help="HTTP backend origin for /api/*")
+    parser.add_argument("--upstream", action="append", help="HTTP backend origin for /api/*; repeat for round-robin")
     parser.add_argument("--upstream-connect-timeout", type=float, default=2.0)
     parser.add_argument("--upstream-response-timeout", type=float, default=10.0)
     parser.add_argument("--upstream-pool-size", type=int, default=0)

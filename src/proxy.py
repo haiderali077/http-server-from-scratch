@@ -108,10 +108,16 @@ class UpstreamBody:
         self.connection, self.chunks = connection, chunks
         self.reader, self.pool, self.reusable = reader, pool, reusable
         self.complete, self.closed = bodyless, False
+        self.on_failure = None
         self.started = time.monotonic()
         self.duration = None
     def __iter__(self):
-        yield from self.chunks
+        try:
+            yield from self.chunks
+        except BaseException:
+            if self.on_failure:
+                self.on_failure()
+            raise
         self.complete = True
     def close(self):
         if self.closed:

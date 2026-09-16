@@ -4,17 +4,21 @@ if __package__:
     from .static_files import serve_file
     from .proxy import Proxy
     from .file_cache import FileCache
+    from .backends import Backends
 else:
     from http_response import build_response, chunked_response, error_response
     from static_files import serve_file
     from proxy import Proxy
     from file_cache import FileCache
+    from backends import Backends
 
 
 class Application:
     def __init__(self, document_root, upstream=None, proxy_options=None, cache_bytes=8388608):
         self.document_root = document_root
-        self.proxy = Proxy(upstream, **(proxy_options or {})) if upstream else None
+        urls = list(upstream) if isinstance(upstream, (list, tuple)) else ([upstream] if upstream else [])
+        options = proxy_options or {}
+        self.proxy = (Backends(urls, **options) if len(urls) > 1 else Proxy(urls[0], **options)) if urls else None
         self.cache = FileCache(cache_bytes)
         self.routes = {
             "/echo": ({"POST"}, self.echo),
