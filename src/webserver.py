@@ -12,6 +12,7 @@ if __package__:
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from .transport import SocketReader, send_response
     from .workers import BoundedPool
+    from .application import Application
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
@@ -19,6 +20,7 @@ else:
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from transport import SocketReader, send_response
     from workers import BoundedPool
+    from application import Application
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
@@ -29,6 +31,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
     response_started = False
     waiting_for_idle = False
     reader = SocketReader(connection)
+    application = Application(document_root)
     try:
         for number in range(100):
             response_started = False
@@ -54,7 +57,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             keep_alive = (request.version == "HTTP/1.1" and
                           "close" not in connection_tokens and
                           number < 99)
-            response = serve_file(request, document_root)
+            response = application.dispatch(request)
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True
             connection.settimeout(timeouts.write)

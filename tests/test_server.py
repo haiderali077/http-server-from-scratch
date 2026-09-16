@@ -239,7 +239,7 @@ class ConnectionTests(unittest.TestCase):
     def test_unexpected_handler_error_returns_500_and_closes(self):
         connection = Mock()
         connection.recv.return_value = b"GET / HTTP/1.1\r\nHost: local\r\n\r\n"
-        with patch("src.webserver.serve_file", side_effect=RuntimeError("handler failed")), \
+        with patch("src.application.serve_file", side_effect=RuntimeError("handler failed")), \
                 contextlib.redirect_stderr(io.StringIO()):
             handle_connection(connection)
         self.assertIn(b"500 Internal Server Error", connection.sendall.call_args_list[0].args[0])
