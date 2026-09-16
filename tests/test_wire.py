@@ -1,8 +1,21 @@
 import unittest
+import http.client
 from tests.support import RunningServer, request_bytes
 
 
 class WireTests(unittest.TestCase):
+    def test_head_has_get_length_but_no_body(self):
+        with RunningServer() as server:
+            client = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
+            try:
+                client.request("HEAD", "/large.png", headers={"Connection": "close"})
+                response = client.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader("Content-Length"), "1048576")
+                self.assertEqual(response.read(), b"")
+            finally:
+                client.close()
+
     def test_large_response_is_complete(self):
         with RunningServer() as server:
             head, body = server.exchange(request_bytes("/large.png")).split(b"\r\n\r\n", 1)

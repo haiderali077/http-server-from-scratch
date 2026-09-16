@@ -75,9 +75,9 @@ def is_not_modified(last_modified, if_modified_since):
 
 
 def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
-    """Return an HTTPResponse for the current GET-only static file service."""
-    if request.method != "GET":
-        return error_response(405, {"Allow": "GET"})
+    """Serve GET representations and bodyless HEAD metadata."""
+    if request.method not in ("GET", "HEAD"):
+        return error_response(405, {"Allow": "GET, HEAD"})
 
     try:
         filename = resolve_filename(request.path, document_root)
@@ -92,14 +92,13 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
         if is_not_modified(last_modified, request.headers.get("if-modified-since")):
             return build_response(304, headers=headers)
 
-        if extension in BINARY_EXTENSIONS:
-            with open(filename, "rb") as resource:
-                body = resource.read()
-        else:
-            with open(filename, "r", encoding="utf-8") as resource:
-                body = resource.read().encode("utf-8")
-
         headers["Content-Type"] = get_content_type(filename)
+        if request.method == "HEAD":
+            response = build_response(200, headers=headers)
+            response.headers["Content-Length"] = str(os.path.getsize(filename))
+            return response
+        with open(filename, "rb") as resource:
+            body = resource.read()
         return build_response(200, body, headers)
     except PathOutsideDocumentRoot:
         return error_response(403)

@@ -146,7 +146,7 @@ class StaticFileTests(unittest.TestCase):
         self.assertEqual(self.serve(self.request("/missing.txt")).status, 415)
         response = self.serve(self.request(method="POST"))
         self.assertEqual(response.status, 405)
-        self.assertEqual(response.headers["Allow"], "GET")
+        self.assertEqual(response.headers["Allow"], "GET, HEAD")
 
     def test_query_does_not_change_static_file_lookup(self):
         response = self.serve(self.request("/café.html?download=1"))

@@ -58,7 +58,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True
             connection.settimeout(timeouts.write)
-            send_response(connection, response)
+            send_response(connection, response, suppress_body=request.method == "HEAD")
             if not keep_alive:
                 return
     except HTTPError as error:
