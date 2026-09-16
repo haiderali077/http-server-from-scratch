@@ -6,11 +6,15 @@ import socket
 import sys
 
 if __package__:
-    from .http_request import parse_request
+    from .http_request import HTTPError, parse_request
+    from .http_response import error_response
+    from .limits import Limits
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from .transport import SocketReader
 else:
-    from http_request import parse_request
+    from http_request import HTTPError, parse_request
+    from http_response import error_response
+    from limits import Limits
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from transport import SocketReader
 
@@ -18,20 +22,23 @@ else:
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 
-def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT):
+def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits()):
     """Own one accepted socket: receive, dispatch, send, and close."""
     try:
-        message = SocketReader(connection).read_until(b"\r\n\r\n").decode("iso-8859-1")
-        print(message)
-        try:
-            request = parse_request(message)
-        except ValueError:
-            return
+        message = SocketReader(connection).read_until(b"\r\n\r\n", limits.header_bytes).decode("iso-8859-1")
+        request = parse_request(message, limits.body_bytes)
 
         response = serve_file(request, document_root)
         connection.send(response.header_bytes())
         if response.body:
             connection.send(response.body)
+    except HTTPError as error:
+        response = error_response(error.status)
+        try:
+            connection.send(response.header_bytes())
+            connection.send(response.body)
+        except OSError:
+            pass
     except (OSError, ValueError) as error:
         # A failed connection cannot reliably receive a file error response.
         print("Connection error: {}".format(error), file=sys.stderr)

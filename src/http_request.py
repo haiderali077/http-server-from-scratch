@@ -44,7 +44,7 @@ def parse_request_target(target):
     return path, query
 
 
-def parse_request(message):
+def parse_request(message, max_body_bytes=1048576):
     """Validate the supported HTTP/1.0 and HTTP/1.1 request header syntax."""
     lines = message.split("\r\n")
     parts = lines[0].split()
@@ -70,6 +70,12 @@ def parse_request(message):
     host = headers.get("host", "")
     if parts[2] == "HTTP/1.1" and (not host or any(character.isspace() for character in host) or "," in host):
         raise HTTPError("HTTP/1.1 requires one valid Host header")
+    if "content-length" in headers:
+        length = headers["content-length"]
+        if not re.fullmatch(r"[0-9]+", length):
+            raise HTTPError("Invalid Content-Length")
+        if len(length) > 12 or int(length) > max_body_bytes:
+            raise HTTPError("Request body exceeds configured limit", 413)
 
     path, query = parse_request_target(parts[1])
     return HTTPRequest(
