@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 if __package__:
     from .http_response import build_response, error_response, format_http_date
@@ -65,12 +66,11 @@ def is_not_modified(last_modified, if_modified_since):
     if not if_modified_since:
         return False
     try:
-        client_date = datetime.strptime(
-            if_modified_since, "%a, %d %b %Y %H:%M:%S %Z"
-        ).replace(tzinfo=timezone.utc)
-        file_date = datetime.fromtimestamp(last_modified, timezone.utc)
-        return file_date <= client_date
-    except ValueError:
+        client_date = parsedate_to_datetime(if_modified_since)
+        if client_date.tzinfo is None:
+            client_date = client_date.replace(tzinfo=timezone.utc)
+        return int(last_modified) <= int(client_date.timestamp())
+    except (ValueError, TypeError, OverflowError):
         return False
 
 
