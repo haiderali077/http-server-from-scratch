@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import hashlib
+import platform
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,6 +26,8 @@ def main():
         with RunningServer("--upstream", f"http://127.0.0.1:{port}", *args.server_option) as frontend:
             scenarios = [("direct", port, process.pid, "/index.html"), ("proxy", frontend.port, frontend.process.pid, "/api/index.html")]
             data = {"timestamp": datetime.now(timezone.utc).isoformat(), "clients": 4, "keep_alive": True, "response_bytes": 1024, "requests_per_run": args.requests, "server_options": args.server_option,
+                    "python": sys.version, "platform": platform.platform(),
+                    "source_fingerprint": hashlib.sha256(b"".join(p.read_bytes() for p in sorted(Path("src").glob("*.py")))).hexdigest(),
                     "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
                     "note": "Shared local host; direct and proxy use identical bytes, client count and frontend persistence. CPU/RSS refer to the named server process, excluding client and other service."}
             for name, target, pid, path in scenarios:

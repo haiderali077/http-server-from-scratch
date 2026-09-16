@@ -42,6 +42,13 @@ class Application:
     def is_proxy(self, request):
         return self.proxy is not None and (request.path == "/api" or request.path.startswith("/api/"))
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        if self.proxy:
+            self.proxy.close()
+
     def echo(self, request):
         return build_response(200, request.body, {"Content-Type": "application/octet-stream"})
 

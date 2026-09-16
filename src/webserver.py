@@ -174,7 +174,7 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
             with lock:
                 connections.discard(connection)
 
-    with Events(access_log, error_log) as events, BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    with application, Events(access_log, error_log) as events, BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((host, port))
         listener.listen(max(1, workers + queue_size))
@@ -232,6 +232,7 @@ def main(argv):
     parser.add_argument("--upstream", help="HTTP backend origin for /api/*")
     parser.add_argument("--upstream-connect-timeout", type=float, default=2.0)
     parser.add_argument("--upstream-response-timeout", type=float, default=10.0)
+    parser.add_argument("--upstream-pool-size", type=int, default=0)
     parser.add_argument("--access-log", type=Path)
     parser.add_argument("--error-log", type=Path)
     parser.add_argument("--cache-bytes", type=int, default=8388608)
@@ -257,7 +258,8 @@ def main(argv):
                    timeouts=Timeouts(args.header_timeout, args.body_timeout, args.write_timeout, args.idle_timeout),
                    max_requests=args.max_requests, shutdown_timeout=args.shutdown_timeout, stop_event=stop,
                    upstream=args.upstream, proxy_options={"connect_timeout": args.upstream_connect_timeout,
-                                                        "response_timeout": args.upstream_response_timeout},
+                                                        "response_timeout": args.upstream_response_timeout,
+                                                        "pool_size": args.upstream_pool_size},
                    access_log=args.access_log, error_log=args.error_log, cache_bytes=args.cache_bytes,
                    mode=args.mode, max_connections=args.max_connections)
     except ValueError as error:

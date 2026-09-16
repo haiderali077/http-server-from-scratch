@@ -8,10 +8,12 @@ if __package__:
     from .http_response import build_response
     from .transport import BodyStream, SocketReader
     from .http_request import HTTPError, TOKEN
+    from .upstream_pool import UpstreamPool
 else:
     from http_response import build_response
     from transport import BodyStream, SocketReader
     from http_request import HTTPError, TOKEN
+    from upstream_pool import UpstreamPool
 
 
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"}
@@ -62,6 +64,8 @@ def response_header(reader, timeout=5):
         if status == 101:
             raise ValueError("Protocol upgrade is unsupported")
         if status >= 200:
+            if lines[0].startswith("HTTP/1.0") and "keep-alive" not in headers.get("connection", "").lower().split(","):
+                headers["connection"] = "close"
             return status, headers
     raise ValueError("Too many informational responses")
 
@@ -100,14 +104,23 @@ def response_chunks(reader, request, status, headers, timeout=10):
 
 
 class UpstreamBody:
-    def __init__(self, connection, chunks):
+    def __init__(self, connection, chunks, reader=None, pool=None, reusable=False, bodyless=False):
         self.connection, self.chunks = connection, chunks
+        self.reader, self.pool, self.reusable = reader, pool, reusable
+        self.complete, self.closed = bodyless, False
         self.started = time.monotonic()
         self.duration = None
     def __iter__(self):
         yield from self.chunks
+        self.complete = True
     def close(self):
-        self.connection.close()
+        if self.closed:
+            return
+        self.closed = True
+        if self.pool:
+            self.pool.release(self.connection, self.reusable and self.complete and not self.reader.buffer)
+        else:
+            self.connection.close()
         self.duration = time.monotonic() - self.started
 
 
@@ -116,7 +129,7 @@ class ProxyFailure(HTTPError):
 
 
 class Proxy:
-    def __init__(self, url, connect_timeout=2.0, response_timeout=10.0):
+    def __init__(self, url, connect_timeout=2.0, response_timeout=10.0, pool_size=0):
         if min(connect_timeout, response_timeout) <= 0:
             raise ValueError("Upstream timeouts must be positive")
         self.connect_timeout, self.response_timeout = connect_timeout, response_timeout
@@ -126,6 +139,13 @@ class Proxy:
             raise ValueError("Upstream must be an http://host:port origin without credentials or path")
         self.host, self.port = parsed.hostname, parsed.port or 80
         self.authority = f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
+        if pool_size < 0:
+            raise ValueError("Upstream pool size must be nonnegative")
+        self.pool = UpstreamPool(self.host, self.port, pool_size, connect_timeout) if pool_size else None
+
+    def close(self):
+        if self.pool:
+            self.pool.close()
 
     def forward(self, request, peer=None):
         started = time.monotonic()
@@ -137,6 +157,8 @@ class Proxy:
             raise failure from error
         except (OSError, ValueError) as error:
             if isinstance(error, HTTPError):
+                if isinstance(error, ProxyFailure):
+                    error.upstream_seconds = time.monotonic() - started
                 raise
             failure = ProxyFailure("Upstream connection or protocol failure", 502)
             failure.upstream_seconds = time.monotonic() - started
@@ -146,7 +168,7 @@ class Proxy:
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
         if request.query:
             path += "?" + request.query
-        connection = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
+        connection = self.pool.acquire() if self.pool else socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
         try:
             connection.settimeout(self.response_timeout)
             fields = end_to_end_headers(request.headers)
@@ -159,7 +181,7 @@ class Proxy:
             fields["X-Forwarded-Proto"] = "http"
             if peer:
                 fields["X-Forwarded-For"] = peer[0]
-            fields.update({"Host": self.authority, "Connection": "close"})
+            fields.update({"Host": self.authority, "Connection": "keep-alive" if self.pool else "close"})
             chunked = "transfer-encoding" in request.headers
             fields["Transfer-Encoding" if chunked else "Content-Length"] = "chunked" if chunked else request.headers.get("content-length", str(len(request.body)) if isinstance(request.body, bytes) else "0")
             message = f"{request.method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
@@ -182,8 +204,15 @@ class Proxy:
             elif request.method != "HEAD" and status not in (204, 304):
                 response.headers.pop("Content-Length", None)
                 response.headers["Transfer-Encoding"] = "chunked"
-            body = UpstreamBody(connection, response_chunks(reader, request, status, headers, self.response_timeout))
+            bodyless = request.method == "HEAD" or status in (204, 304)
+            framed = bodyless or "content-length" in headers or "transfer-encoding" in headers
+            reusable = framed and "close" not in {t.strip().lower() for t in headers.get("connection", "").split(",")}
+            body = UpstreamBody(connection, response_chunks(reader, request, status, headers, self.response_timeout),
+                                reader, self.pool, reusable, bodyless)
             return response._replace(body=body)
         except BaseException:
-            connection.close()
+            if self.pool:
+                self.pool.release(connection, False)
+            else:
+                connection.close()
             raise

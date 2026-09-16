@@ -11,7 +11,7 @@ class Backend(BaseHTTPRequestHandler):
     seen = []
 
     def do_GET(self):
-        self.server.seen.append((self.command, self.path, dict(self.headers), b""))
+        self.server.seen.append((self.command, self.path, dict(self.headers), b"", self.client_address))
         body = b"backend\n"
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))

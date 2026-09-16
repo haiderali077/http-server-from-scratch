@@ -64,6 +64,7 @@ curl --data-binary 'backend echo' http://127.0.0.1:6789/api/echo
 | `--shutdown-timeout` | 2 s drain, then close remaining clients |
 | `--upstream` | Optional HTTP origin for API routes |
 | `--upstream-connect-timeout`, `--upstream-response-timeout` | 2 s connect; 10 s header/body phases |
+| `--upstream-pool-size` | 0 disables backend reuse; positive value caps exclusive backend leases |
 | `--cache-bytes` | 8 MiB shared payload budget; 0 disables storage |
 | `--access-log`, `--error-log` | Optional paths for JSON-line logs |
 | `--mode`, `--max-connections` | Default `threads`; experimental `selectors` parks idle sockets, capped at 256 |
