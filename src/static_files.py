@@ -92,7 +92,23 @@ def etag_matches(condition, etag):
                for value in condition.split(","))
 
 
-def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
+class FileBody:
+    def __init__(self, filename, size):
+        self.resource = open(filename, "rb")
+        self.size = size
+    def __iter__(self):
+        remaining = self.size
+        while remaining:
+            data = self.resource.read(min(16384, remaining))
+            if not data:
+                raise OSError("File shortened during response")
+            remaining -= len(data)
+            yield data
+    def close(self):
+        self.resource.close()
+
+
+def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT, cache=None):
     """Serve GET representations and bodyless HEAD metadata."""
     if request.method not in ("GET", "HEAD"):
         return error_response(405, {"Allow": "GET, HEAD"})
@@ -119,8 +135,17 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
             response = build_response(200, headers=headers)
             response.headers["Content-Length"] = str(os.path.getsize(filename))
             return response
-        with open(filename, "rb") as resource:
-            body = resource.read()
+        if stat.st_size > (cache.max_entry if cache else 1048576):
+            response = build_response(200, headers=headers)
+            response.headers["Content-Length"] = str(stat.st_size)
+            return response._replace(body=FileBody(filename, stat.st_size))
+        def load():
+            with open(filename, "rb") as resource:
+                body = resource.read(1048577)
+            if file_signature(filename.stat()) != file_signature(stat):
+                raise OSError("File changed during cache fill")
+            return body
+        body = cache.get((str(filename), "identity"), file_signature(stat), load) if cache else load()
         return build_response(200, body, headers)
     except PathOutsideDocumentRoot:
         return error_response(403)

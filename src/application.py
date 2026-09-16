@@ -3,16 +3,19 @@ if __package__:
     from .http_response import build_response, chunked_response, error_response
     from .static_files import serve_file
     from .proxy import Proxy
+    from .file_cache import FileCache
 else:
     from http_response import build_response, chunked_response, error_response
     from static_files import serve_file
     from proxy import Proxy
+    from file_cache import FileCache
 
 
 class Application:
-    def __init__(self, document_root, upstream=None, proxy_options=None):
+    def __init__(self, document_root, upstream=None, proxy_options=None, cache_bytes=8388608):
         self.document_root = document_root
         self.proxy = Proxy(upstream, **(proxy_options or {})) if upstream else None
+        self.cache = FileCache(cache_bytes)
         self.routes = {
             "/echo": ({"POST"}, self.echo),
             "/health": ({"GET", "HEAD"}, self.health),
@@ -21,7 +24,7 @@ class Application:
 
     def dispatch(self, request, peer=None):
         if request.path == "/static" or request.path.startswith("/static/"):
-            return serve_file(request._replace(path=request.path[7:] or "/"), self.document_root)
+            return serve_file(request._replace(path=request.path[7:] or "/"), self.document_root, self.cache)
         if request.path == "/api" or request.path.startswith("/api/"):
             if not self.proxy:
                 return error_response(503)
@@ -32,7 +35,7 @@ class Application:
             if request.method not in allowed:
                 return error_response(405, {"Allow": ", ".join(sorted(allowed))})
             return handler(request)
-        return serve_file(request, self.document_root)
+        return serve_file(request, self.document_root, self.cache)
 
     def is_proxy(self, request):
         return self.proxy is not None and (request.path == "/api" or request.path.startswith("/api/"))
