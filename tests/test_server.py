@@ -109,8 +109,9 @@ class StaticFileTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(os.chdir, self.original_directory)
-        self.document_root = Path(self.directory.name).resolve()
-        os.chdir(self.directory.name)
+        self.document_root = Path(self.directory.name).resolve() / "public"
+        self.document_root.mkdir()
+        os.chdir(self.document_root)
         Path("index.html").write_text("hello café", encoding="utf-8")
         Path("page.htm").write_text("page", encoding="utf-8")
         Path("café.html").write_text("encoded path", encoding="utf-8")
