@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from http import HTTPStatus
-from typing import Dict, NamedTuple
+from typing import Dict, Iterable, NamedTuple
 
 
 SERVER_NAME = "SimplePythonServer/1.0"
@@ -19,7 +19,7 @@ def format_http_date(timestamp=None):
 class HTTPResponse(NamedTuple):
     status: int
     headers: Dict[str, str]
-    body: bytes
+    body: bytes | Iterable[bytes]
     upstream_seconds: float | None = None
 
     def header_bytes(self):

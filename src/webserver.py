@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import signal
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -73,6 +74,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             if not header:
                 return
             request = parse_request(header.decode("iso-8859-1"), limits.body_bytes)
+            request = request._replace(scheme="https" if isinstance(connection, ssl.SSLSocket) else "http")
             if application.is_proxy(request):
                 chunks = (reader.iter_chunked(limits.body_bytes, timeouts.body) if "transfer-encoding" in request.headers
                           else reader.iter_exact(int(request.headers.get("content-length", "0")), limits.body_bytes, timeouts.body))
@@ -151,7 +153,8 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
 def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16, *,
                host="127.0.0.1", limits=Limits(), timeouts=Timeouts(), max_requests=100,
                shutdown_timeout=2.0, stop_event=None, upstream=None, proxy_options=None, access_log=None, error_log=None,
-               cache_bytes=8388608, mode="threads", max_connections=256):
+               cache_bytes=8388608, mode="threads", max_connections=256,
+               tls_cert=None, tls_key=None, tls_handshake_timeout=3.0):
     """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
@@ -161,18 +164,43 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
         raise ValueError("Limits, deadlines, and request counts must be positive")
     if mode not in ("threads", "selectors") or max_connections < 1:
         raise ValueError("Invalid connection mode or capacity")
+    if bool(tls_cert) != bool(tls_key) or tls_handshake_timeout <= 0:
+        raise ValueError("Supply both TLS certificate and key, with a positive handshake deadline")
+    tls_context = None
+    if tls_cert:
+        if mode != "threads":
+            raise ValueError("TLS is supported in thread mode; selector TLS states are not implemented")
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.set_alpn_protocols(["http/1.1"])
+        try:
+            tls_context.load_cert_chain(tls_cert, tls_key)
+        except OSError as error:
+            raise ValueError("Unable to load TLS certificate/key: {}".format(error)) from error
     stop_event = stop_event or threading.Event()
     application = Application(document_root, upstream, proxy_options, cache_bytes)
     connections = set()
     lock = threading.Lock()
 
     def worker(connection):
+        original = connection
         try:
+            if tls_context:
+                connection.settimeout(tls_handshake_timeout)
+                connection = tls_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+                with lock:
+                    connections.discard(original)
+                    connections.add(connection)
+                connection.do_handshake()
             handle_connection(connection, document_root, limits, timeouts,
                               max_requests, stop_event, application, events)
+        except OSError as error:
+            events.emit("error", message="TLS/connection failure: {}".format(error))
+            connection.close()
         finally:
             with lock:
                 connections.discard(connection)
+                connections.discard(original)
 
     with application, Events(access_log, error_log) as events, BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -201,7 +229,8 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
                         connections.discard(connection)
                     try:
                         connection.settimeout(0.1)
-                        send_response(connection, error_response(503))
+                        if not tls_context:
+                            send_response(connection, error_response(503))
                     except OSError:
                         pass
                     finally:
@@ -238,6 +267,9 @@ def main(argv):
     parser.add_argument("--cache-bytes", type=int, default=8388608)
     parser.add_argument("--mode", choices=("threads", "selectors"), default="threads")
     parser.add_argument("--max-connections", type=int, default=256)
+    parser.add_argument("--tls-cert", type=Path)
+    parser.add_argument("--tls-key", type=Path)
+    parser.add_argument("--tls-handshake-timeout", type=float, default=3.0)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--queue-size", type=int, default=16)
     parser.add_argument("--max-headers", type=int, default=32768)
@@ -261,7 +293,8 @@ def main(argv):
                                                         "response_timeout": args.upstream_response_timeout,
                                                         "pool_size": args.upstream_pool_size},
                    access_log=args.access_log, error_log=args.error_log, cache_bytes=args.cache_bytes,
-                   mode=args.mode, max_connections=args.max_connections)
+                   mode=args.mode, max_connections=args.max_connections,
+                   tls_cert=args.tls_cert, tls_key=args.tls_key, tls_handshake_timeout=args.tls_handshake_timeout)
     except ValueError as error:
         print(error, file=sys.stderr)
         sys.exit(2)

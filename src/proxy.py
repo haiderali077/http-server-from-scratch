@@ -184,7 +184,7 @@ class Proxy:
                 if name == "forwarded" or name.startswith("x-forwarded-"):
                     del fields[name]
             fields["X-Forwarded-Host"] = request.headers.get("host", "")
-            fields["X-Forwarded-Proto"] = "http"
+            fields["X-Forwarded-Proto"] = request.scheme
             if peer:
                 fields["X-Forwarded-For"] = peer[0]
             fields.update({"Host": self.authority, "Connection": "keep-alive" if self.pool else "close"})

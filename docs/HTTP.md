@@ -2,6 +2,8 @@
 
 Frontend accepts origin-form requests with HTTP/1.0 or HTTP/1.1; HTTP/1.1 requires exactly one nonempty Host. It emits HTTP/1.1 responses. HTTP/1.0 connections close after one request. HTTP/1.1 supports persistence and ordered pipelining, with a configurable maximum request count.
 
+Optional [frontend TLS](TLS.md) supports HTTPS in thread mode with TLS 1.2+ and HTTP/1.1 ALPN. The experimental selector mode manages idle sockets and dispatches active exchanges to workers; it rejects TLS. [Backend pooling](POOL.md) and [round-robin health selection](BACKENDS.md) are optional; upstream connections remain HTTP.
+
 Local files support GET/HEAD, index and extension fallback, binary bytes, Last-Modified, weak ETags, If-None-Match precedence, and bounded gzip negotiation. `/echo` accepts POST; `/health` and `/stream` accept GET/HEAD. Proxy routes forward methods supported by the backend except CONNECT; no tunnel is created.
 
 Request bodies use one valid Content-Length or exactly `Transfer-Encoding: chunked`. Duplicate lengths, conflicting framing, unsupported transfer codings, malformed syntax, and request trailers are rejected. Chunk-size lines are limited to 128 bytes; trailers are unsupported on either hop. Expect requests return 417; 100-continue upload negotiation is not implemented.

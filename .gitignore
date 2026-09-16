@@ -2,3 +2,6 @@
 /interview.explain.md
 __pycache__/
 *.py[cod]
+*.pem
+*.key
+/certs/

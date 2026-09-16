@@ -1,7 +1,7 @@
 """Convert received HTTP text into request data without touching sockets."""
 
 import re
-from typing import Dict, NamedTuple
+from typing import Dict, Iterable, NamedTuple
 from urllib.parse import unquote
 
 
@@ -20,7 +20,8 @@ class HTTPRequest(NamedTuple):
     query: str
     version: str
     headers: Dict[str, str]
-    body: bytes = b""
+    body: bytes | Iterable[bytes] = b""
+    scheme: str = "http"
 
 
 def parse_request_target(target):

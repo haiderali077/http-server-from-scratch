@@ -12,6 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.11', '3.13']
+        mode: ['threads', 'selectors']
     steps:
       - uses: actions/checkout@v7
         with:
@@ -21,3 +22,5 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m compileall -q src tests
       - run: python -m unittest discover -s tests -v
+        env:
+          HTTP_TEST_MODE: ${{ matrix.mode }}
