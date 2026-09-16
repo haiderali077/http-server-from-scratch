@@ -23,9 +23,14 @@ class HTTPResponse(NamedTuple):
 
     def header_bytes(self):
         """Serialize the status line and headers, ending with a blank line."""
-        reason = HTTPStatus(self.status).phrase
+        try:
+            reason = HTTPStatus(self.status).phrase
+        except ValueError:
+            reason = "Unknown"
         lines = ["HTTP/1.1 {} {}".format(self.status, reason)]
-        lines.extend("{}: {}".format(name, value) for name, value in self.headers.items())
+        for name, value in self.headers.items():
+            for item in value if isinstance(value, list) else [value]:
+                lines.append("{}: {}".format(name, item))
         return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
 
 
@@ -38,7 +43,7 @@ def build_response(status, body=b"", headers=None):
     if headers:
         response_headers.update(headers)
 
-    if status == 304:
+    if status in (204, 304) or 100 <= status < 200:
         # The existing conditional GET response has no body or Content-Length.
         body = b""
         response_headers.pop("Content-Length", None)
