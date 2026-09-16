@@ -1,6 +1,7 @@
 """Map requests to local files and return response data without socket I/O."""
 
 import os
+import hashlib
 from pathlib import Path
 import re
 from datetime import datetime, timezone
@@ -74,6 +75,23 @@ def is_not_modified(last_modified, if_modified_since):
         return False
 
 
+def file_signature(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def file_etag(stat, representation="identity"):
+    # Weak metadata validator: no claim of byte identity under arbitrary stat manipulation.
+    digest = hashlib.sha256(repr((file_signature(stat), representation)).encode()).hexdigest()[:24]
+    return f'W/"{digest}"'
+
+
+def etag_matches(condition, etag):
+    if condition is None:
+        return False
+    return any(value.strip() == "*" or value.strip().removeprefix("W/") == etag.removeprefix("W/")
+               for value in condition.split(","))
+
+
 def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
     """Serve GET representations and bodyless HEAD metadata."""
     if request.method not in ("GET", "HEAD"):
@@ -87,9 +105,13 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
         if not os.path.exists(filename):
             return error_response(404)
 
-        last_modified = os.path.getmtime(filename)
-        headers = {"Last-Modified": format_http_date(last_modified)}
-        if is_not_modified(last_modified, request.headers.get("if-modified-since")):
+        stat = filename.stat()
+        last_modified = stat.st_mtime
+        headers = {"Last-Modified": format_http_date(last_modified), "ETag": file_etag(stat)}
+        condition = request.headers.get("if-none-match")
+        unchanged = (etag_matches(condition, headers["ETag"]) if condition is not None
+                     else is_not_modified(last_modified, request.headers.get("if-modified-since")))
+        if unchanged:
             return build_response(304, headers=headers)
 
         headers["Content-Type"] = get_content_type(filename)
