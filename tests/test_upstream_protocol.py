@@ -5,6 +5,8 @@ from src.proxy import response_header, response_body
 from src.transport import SocketReader
 from src.proxy import response_chunks
 from src.http_request import HTTPRequest
+from src.http_request import HTTPError, parse_request
+from src.http_response import build_response
 
 
 class BytesSocket:
@@ -18,6 +20,12 @@ class BytesSocket:
 
 
 class UpstreamProtocolTests(unittest.TestCase):
+    def test_request_target_controls_and_header_octets(self):
+        for target in ["/x?q=\x00", "/x%7f", "/x?q=é"]:
+            with self.assertRaises(HTTPError):
+                parse_request(f"GET {target} HTTP/1.1\r\nHost: local\r\n\r\n")
+        self.assertIn(b"X-Test: \xff\r\n", build_response(200, headers={"X-Test": "ÿ"}).header_bytes())
+
     def test_total_header_deadline(self):
         reader = SocketReader(BytesSocket(b"HTTP/1.1 100 Continue\r\n\r\n"))
         with patch("src.proxy.time.monotonic", side_effect=[0, 0, 0, 0, 2, 2, 2]):

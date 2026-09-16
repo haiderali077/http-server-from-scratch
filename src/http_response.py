@@ -32,7 +32,7 @@ class HTTPResponse(NamedTuple):
         for name, value in self.headers.items():
             for item in value if isinstance(value, list) else [value]:
                 lines.append("{}: {}".format(name, item))
-        return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
+        return ("\r\n".join(lines) + "\r\n\r\n").encode("iso-8859-1")
 
 
 def build_response(status, body=b"", headers=None):

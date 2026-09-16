@@ -2,6 +2,8 @@
 
 A Python standard-library project implementing HTTP framing, concurrent connections, static representations, and a configured reverse proxy over raw sockets. It is a learning implementation with a documented protocol subset.
 
+See the [supported HTTP subset and limitations](docs/HTTP.md).
+
 ## Architecture
 
 ```mermaid

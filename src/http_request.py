@@ -31,6 +31,8 @@ def parse_request_target(target):
     """
     if not target.startswith("/") or "#" in target:
         raise HTTPError("Only origin-form paths without fragments are supported")
+    if any(not 33 <= ord(character) <= 126 for character in target):
+        raise HTTPError("Request target must use visible ASCII and percent escapes")
     raw_path, separator, query = target.partition("?")
     for value in (raw_path, query if separator else ""):
         if re.search(r"%(?![0-9A-Fa-f]{2})", value):
@@ -40,7 +42,7 @@ def parse_request_target(target):
         path = unquote(raw_path, encoding="utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise HTTPError("Request path has invalid UTF-8 percent encoding") from error
-    if any(ord(character) < 32 or character == "\\" for character in path):
+    if any(ord(character) < 32 or ord(character) == 127 or character == "\\" for character in path):
         raise HTTPError("Invalid character in request path")
     return path, query
 
@@ -48,7 +50,7 @@ def parse_request_target(target):
 def parse_request(message, max_body_bytes=1048576):
     """Validate the supported HTTP/1.0 and HTTP/1.1 request header syntax."""
     lines = message.split("\r\n")
-    parts = lines[0].split()
+    parts = lines[0].split(" ")
     if len(parts) != 3 or not TOKEN.fullmatch(parts[0]):
         raise HTTPError("Invalid request line")
     if parts[2] not in ("HTTP/1.0", "HTTP/1.1"):

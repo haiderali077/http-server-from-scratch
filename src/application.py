@@ -26,6 +26,8 @@ class Application:
         if request.path == "/static" or request.path.startswith("/static/"):
             return serve_file(request._replace(path=request.path[7:] or "/"), self.document_root, self.cache)
         if request.path == "/api" or request.path.startswith("/api/"):
+            if request.method == "CONNECT":
+                return error_response(501)
             if not self.proxy:
                 return error_response(503)
             return self.proxy.forward(request._replace(path=request.path[4:] or "/"), peer)
