@@ -10,6 +10,16 @@ else:
     from transport import SocketReader
 
 
+HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"}
+
+
+def end_to_end_headers(headers):
+    """Each Connection token names an additional field local to this hop."""
+    lower = {name.lower(): value.strip() for name, value in headers.items()}
+    excluded = HOP_HEADERS | {part.strip().lower() for part in lower.get("connection", "").split(",")}
+    return {name: value for name, value in lower.items() if name not in excluded}
+
+
 class Proxy:
     def __init__(self, url):
         parsed = urlsplit(url)
@@ -24,9 +34,10 @@ class Proxy:
         if request.query:
             path += "?" + request.query
         with socket.create_connection((self.host, self.port), timeout=5) as connection:
-            fields = {"Host": self.authority, "Connection": "close", "Content-Length": str(len(request.body))}
-            if "content-type" in request.headers:
-                fields["Content-Type"] = request.headers["content-type"]
+            fields = end_to_end_headers(request.headers)
+            fields.pop("host", None)
+            fields.pop("content-length", None)
+            fields.update({"Host": self.authority, "Connection": "close", "Content-Length": str(len(request.body))})
             message = f"{request.method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
             connection.sendall(message.encode("iso-8859-1"))
             if request.body:
@@ -38,7 +49,8 @@ class Proxy:
             headers = dict(line.split(":", 1) for line in lines[1:] if line)
             length = int(headers.get("Content-Length", "0"))
             body = b"" if request.method == "HEAD" else reader.read_exact(length, 64 * 1024 * 1024, 10)
-            response = build_response(status, body, {"Content-Type": headers.get("Content-Type", "application/octet-stream").strip()})
+            forwarded = {name.title(): value for name, value in end_to_end_headers(headers).items() if name not in {"content-length", "server", "date"}}
+            response = build_response(status, body, forwarded)
             if request.method == "HEAD":
                 response.headers["Content-Length"] = str(length)
             return response

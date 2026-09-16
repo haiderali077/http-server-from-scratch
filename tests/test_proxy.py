@@ -3,6 +3,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tests.support import RunningServer, request_bytes
 from src.proxy import Proxy
+from src.proxy import end_to_end_headers
 
 
 class Backend(BaseHTTPRequestHandler):
@@ -50,6 +51,17 @@ class Upstream:
 
 
 class ProxyTests(unittest.TestCase):
+    def test_hop_headers(self):
+        self.assertEqual(end_to_end_headers({"Connection": "X-Secret, keep-alive", "X-Secret": "hidden", "Keep-Alive": "timeout=5", "TE": "trailers", "X-End": "kept"}), {"x-end": "kept"})
+
+    def test_client_hop_fields_do_not_reach_backend(self):
+        with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
+            raw = b"GET /api/item HTTP/1.1\r\nHost: client\r\nConnection: close, X-Secret\r\nX-Secret: hidden\r\nX-End: kept\r\n\r\n"
+            server.exchange(raw)
+            fields = {k.lower(): v for k, v in backend.server.seen[-1][2].items()}
+            self.assertNotIn("x-secret", fields)
+            self.assertEqual(fields["x-end"], "kept")
+
     def test_local_and_backend_routes(self):
         with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
             self.assertTrue(server.exchange(request_bytes("/static/")).endswith(b"hello"))
