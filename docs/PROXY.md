@@ -1,5 +1,22 @@
 # Reverse proxy contract
 
+Start the demo in one terminal:
+
+```sh
+python3 examples/backend.py --port 8000
+```
+
+Start the frontend in another:
+
+```sh
+python3 -m src.webserver --port 6789 --upstream http://127.0.0.1:8000
+curl http://127.0.0.1:6789/static/
+curl http://127.0.0.1:6789/api/health
+curl --data-binary 'hello backend' http://127.0.0.1:6789/api/echo
+```
+
+The demo's GET payload is 1 KiB, `/health` returns `ok`, and POST echoes bytes with a 1 MiB cap. It uses Python's HTTP library as an independent example backend; the frontend/proxy does its own socket framing. Stop each service with Ctrl-C.
+
 Run with `--upstream http://127.0.0.1:8000`. Only the configured origin is contacted.
 
 The `/api` prefix is stripped: `/api/users` becomes `/users`; `/api` and `/api/` become `/`. The `/static` prefix is also stripped before resolving files inside the document root. `/apiculture` is an ordinary local-file path, not a proxy route.
