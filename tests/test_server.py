@@ -240,7 +240,7 @@ class ConnectionTests(unittest.TestCase):
         connection.recv.side_effect = [b"GET", b""]
         with contextlib.redirect_stdout(io.StringIO()):
             handle_connection(connection)
-        connection.send.assert_not_called()
+        connection.sendall.assert_not_called()
         connection.close.assert_called_once_with()
 
     def test_receive_error_closes_without_sending_file_error(self):
@@ -248,16 +248,16 @@ class ConnectionTests(unittest.TestCase):
         connection.recv.side_effect = ConnectionResetError("disconnected")
         with contextlib.redirect_stderr(io.StringIO()):
             handle_connection(connection)
-        connection.send.assert_not_called()
+        connection.sendall.assert_not_called()
         connection.close.assert_called_once_with()
 
     def test_send_failure_closes_without_retrying_a_404(self):
         connection = Mock()
         connection.recv.return_value = b"POST / HTTP/1.1\r\nHost: local\r\n\r\n"
-        connection.send.side_effect = BrokenPipeError("disconnected")
+        connection.sendall.side_effect = BrokenPipeError("disconnected")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             handle_connection(connection)
-        self.assertEqual(connection.send.call_count, 1)
+        self.assertEqual(connection.sendall.call_count, 1)
         connection.close.assert_called_once_with()
 
 

@@ -10,13 +10,13 @@ if __package__:
     from .http_response import error_response
     from .limits import Limits
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
-    from .transport import SocketReader
+    from .transport import SocketReader, send_response
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
     from limits import Limits
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
-    from transport import SocketReader
+    from transport import SocketReader, send_response
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
@@ -29,14 +29,11 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
         request = parse_request(message, limits.body_bytes)
 
         response = serve_file(request, document_root)
-        connection.send(response.header_bytes())
-        if response.body:
-            connection.send(response.body)
+        send_response(connection, response)
     except HTTPError as error:
         response = error_response(error.status)
         try:
-            connection.send(response.header_bytes())
-            connection.send(response.body)
+            send_response(connection, response)
         except OSError:
             pass
     except (OSError, ValueError) as error:

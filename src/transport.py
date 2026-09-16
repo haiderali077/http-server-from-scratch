@@ -6,6 +6,13 @@ else:
     from http_request import HTTPError
 
 
+def send_response(connection, response, suppress_body=False):
+    """Transmit complete buffers; a successful send() alone is not sufficient."""
+    connection.sendall(response.header_bytes())
+    if response.body and not suppress_body:
+        connection.sendall(response.body)
+
+
 class SocketReader:
     def __init__(self, connection):
         self.connection = connection
