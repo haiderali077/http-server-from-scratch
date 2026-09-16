@@ -20,6 +20,19 @@ class Backend(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        self.server.seen.append((self.command, self.path, dict(self.headers), body))
+        self.send_response(201)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "8")
+        self.end_headers()
+
 
 class Upstream:
     def __enter__(self):
@@ -54,3 +67,13 @@ class ProxyTests(unittest.TestCase):
                 self.assertIn(b"200 OK", server.exchange(request_bytes(path)))
             self.assertEqual([r[1] for r in backend.server.seen], ["/", "/", "/a%20b"])
             self.assertIn(b"404 Not Found", server.exchange(request_bytes("/apiculture")))
+
+    def test_methods_queries_and_binary_bodies(self):
+        with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
+            result = server.exchange(request_bytes("/api/echo?q=a%20b&x=1", "POST", "Content-Length: 3\r\n", b"\x00\xffx"))
+            self.assertIn(b"201 Created", result)
+            self.assertTrue(result.endswith(b"\x00\xffx"))
+            self.assertEqual(backend.server.seen[-1][1], "/echo?q=a%20b&x=1")
+            head = server.exchange(request_bytes("/api/item", "HEAD"))
+            self.assertTrue(head.endswith(b"\r\n\r\n"))
+            self.assertIn(b"Content-Length: 8", head)
