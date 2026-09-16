@@ -1,4 +1,5 @@
 import socket
+import select
 import subprocess
 import sys
 import tempfile
@@ -18,14 +19,20 @@ class RunningServer:
         self.root = Path(self.directory.name)
         (self.root / "index.html").write_bytes(b"hello")
         (self.root / "large.png").write_bytes(b"0123456789abcdef" * 65536)
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            self.port = probe.getsockname()[1]
         self.process = subprocess.Popen(
-            [sys.executable, str(PROJECT_ROOT / "src/webserver.py"), "-p", str(self.port),
+            [sys.executable, "-u", str(PROJECT_ROOT / "src/webserver.py"), "-p", "0",
              "-d", str(self.root), *self.options],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
+        if not select.select([self.process.stdout], [], [], 3)[0]:
+            self.__exit__(None, None, None)
+            raise RuntimeError("Server did not announce its ephemeral port")
+        line = self.process.stdout.readline()
+        try:
+            self.port = int(line.split()[-1])
+        except (ValueError, IndexError):
+            self.__exit__(None, None, None)
+            raise RuntimeError("Server failed before listening")
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and self.process.poll() is None:
             try:
@@ -57,6 +64,7 @@ class RunningServer:
             self.process.kill()
             self.process.wait()
         self.directory.cleanup()
+        self.process.stdout.close()
 
 
 def request_bytes(path="/", method="GET", headers="", body=b""):
