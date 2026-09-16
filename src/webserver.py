@@ -8,14 +8,14 @@ import sys
 if __package__:
     from .http_request import HTTPError, parse_request
     from .http_response import error_response
-    from .limits import Limits
+    from .limits import Limits, Timeouts
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from .transport import SocketReader, send_response
     from .workers import BoundedPool
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
-    from limits import Limits
+    from limits import Limits, Timeouts
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from transport import SocketReader, send_response
     from workers import BoundedPool
@@ -24,22 +24,31 @@ else:
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 
-def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits()):
+def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts()):
     """Own one accepted socket: receive, dispatch, send, and close."""
     response_started = False
     try:
-        message = SocketReader(connection).read_until(b"\r\n\r\n", limits.header_bytes).decode("iso-8859-1")
+        message = SocketReader(connection).read_until(b"\r\n\r\n", limits.header_bytes, timeout=timeouts.header).decode("iso-8859-1")
         request = parse_request(message, limits.body_bytes)
 
         response = serve_file(request, document_root)
         response_started = True
+        connection.settimeout(timeouts.write)
         send_response(connection, response)
     except HTTPError as error:
         response = error_response(error.status)
         try:
+            connection.settimeout(timeouts.write)
             send_response(connection, response)
         except OSError:
             pass
+    except socket.timeout:
+        if not response_started:
+            try:
+                connection.settimeout(timeouts.write)
+                send_response(connection, error_response(408))
+            except OSError:
+                pass
     except (OSError, ValueError) as error:
         # A failed connection cannot reliably receive a file error response.
         print("Connection error: {}".format(error), file=sys.stderr)

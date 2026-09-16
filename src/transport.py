@@ -1,4 +1,6 @@
 """Buffered socket reads: TCP delivers a stream, not whole HTTP messages."""
+import socket
+import time
 
 if __package__:
     from .http_request import HTTPError
@@ -18,7 +20,8 @@ class SocketReader:
         self.connection = connection
         self.buffer = bytearray()
 
-    def read_until(self, delimiter, limit=32768, error_status=431):
+    def read_until(self, delimiter, limit=32768, error_status=431, timeout=None):
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             position = self.buffer.find(delimiter)
             if position >= 0:
@@ -30,6 +33,11 @@ class SocketReader:
                 return result
             if len(self.buffer) >= limit:
                 raise HTTPError("Message section exceeds configured limit", error_status)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise socket.timeout("Message read deadline exceeded")
+                self.connection.settimeout(remaining)
             data = self.connection.recv(4096)
             if not data:
                 if self.buffer:
