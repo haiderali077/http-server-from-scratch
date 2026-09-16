@@ -7,3 +7,5 @@ The `/api` prefix is stripped: `/api/users` becomes `/users`; `/api` and `/api/`
 Paths are decoded once by request parsing, then encoded when building the upstream request. Query strings will be forwarded unchanged. A backend URL must be an origin without a path, credentials, query, or fragment.
 
 Connection-specific fields are removed in both directions, including every name listed in `Connection`. Message lengths and connection policy are rebuilt for each hop. Rules follow [HTTP semantics §7.6.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-7.6.1) and [HTTP/1.1 framing](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3).
+
+Upstream `Host` is the configured backend authority. Incoming `Forwarded` and all `X-Forwarded-*` values are discarded. The proxy generates `X-Forwarded-For` from the accepted peer IP, `X-Forwarded-Host` from the client Host field, and `X-Forwarded-Proto` from the frontend protocol. The original Host is client-supplied metadata; backends must not treat it as an authorization decision. This policy assumes a direct client connection and does not trust an external proxy chain.

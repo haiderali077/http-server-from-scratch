@@ -61,7 +61,11 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             keep_alive = (request.version == "HTTP/1.1" and
                           "close" not in connection_tokens and
                           number < max_requests - 1 and not (stop_event and stop_event.is_set()))
-            response = application.dispatch(request)
+            try:
+                peer = connection.getpeername()
+            except (OSError, AttributeError):
+                peer = None
+            response = application.dispatch(request, peer)
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True
             connection.settimeout(timeouts.write)

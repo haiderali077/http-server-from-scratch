@@ -19,13 +19,13 @@ class Application:
             "/stream": ({"GET", "HEAD"}, self.stream),
         }
 
-    def dispatch(self, request):
+    def dispatch(self, request, peer=None):
         if request.path == "/static" or request.path.startswith("/static/"):
             return serve_file(request._replace(path=request.path[7:] or "/"), self.document_root)
         if request.path == "/api" or request.path.startswith("/api/"):
             if not self.proxy:
                 return error_response(503)
-            return self.proxy.forward(request._replace(path=request.path[4:] or "/"))
+            return self.proxy.forward(request._replace(path=request.path[4:] or "/"), peer)
         route = self.routes.get(request.path)
         if route:
             allowed, handler = route

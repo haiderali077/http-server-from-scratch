@@ -29,7 +29,7 @@ class Proxy:
         self.host, self.port = parsed.hostname, parsed.port or 80
         self.authority = f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
 
-    def forward(self, request):
+    def forward(self, request, peer=None):
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
         if request.query:
             path += "?" + request.query
@@ -37,6 +37,13 @@ class Proxy:
             fields = end_to_end_headers(request.headers)
             fields.pop("host", None)
             fields.pop("content-length", None)
+            for name in list(fields):
+                if name == "forwarded" or name.startswith("x-forwarded-"):
+                    del fields[name]
+            fields["X-Forwarded-Host"] = request.headers.get("host", "")
+            fields["X-Forwarded-Proto"] = "http"
+            if peer:
+                fields["X-Forwarded-For"] = peer[0]
             fields.update({"Host": self.authority, "Connection": "close", "Content-Length": str(len(request.body))})
             message = f"{request.method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
             connection.sendall(message.encode("iso-8859-1"))

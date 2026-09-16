@@ -62,6 +62,16 @@ class ProxyTests(unittest.TestCase):
             self.assertNotIn("x-secret", fields)
             self.assertEqual(fields["x-end"], "kept")
 
+    def test_host_and_forwarded_policy(self):
+        with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
+            server.exchange(request_bytes("/api/item", headers="X-Forwarded-For: attacker\r\nForwarded: for=attacker\r\n"))
+            fields = {k.lower(): v for k, v in backend.server.seen[-1][2].items()}
+            self.assertEqual(fields["host"], backend.url.removeprefix("http://"))
+            self.assertEqual(fields["x-forwarded-for"], "127.0.0.1")
+            self.assertEqual(fields["x-forwarded-host"], "localhost")
+            self.assertEqual(fields["x-forwarded-proto"], "http")
+            self.assertNotIn("forwarded", fields)
+
     def test_local_and_backend_routes(self):
         with Upstream() as backend, RunningServer("--upstream", backend.url) as server:
             self.assertTrue(server.exchange(request_bytes("/static/")).endswith(b"hello"))
