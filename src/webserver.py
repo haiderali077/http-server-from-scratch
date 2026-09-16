@@ -11,12 +11,14 @@ if __package__:
     from .limits import Limits
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from .transport import SocketReader, send_response
+    from .workers import BoundedPool
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
     from limits import Limits
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
     from transport import SocketReader, send_response
+    from workers import BoundedPool
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
@@ -55,22 +57,29 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             pass
 
 
-def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT):
-    """Accept connections sequentially and delegate their request lifecycle."""
+def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16):
+    """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
     if not document_root.is_dir():
         raise ValueError("Document root must be an existing directory: {}".format(document_root))
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    with BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("", port))
-        listener.listen(1)
+        listener.listen(max(1, workers + queue_size))
         print("Server is running on port", port)
         print("Document root:", document_root)
         while True:
             print("The server is ready to receive data....")
             connection, address = listener.accept()
-            handle_connection(connection, document_root)
+            if not pool.submit(handle_connection, connection, document_root):
+                try:
+                    connection.settimeout(0.1)
+                    send_response(connection, error_response(503))
+                except OSError:
+                    pass
+                finally:
+                    connection.close()
 
 
 def main(argv):
