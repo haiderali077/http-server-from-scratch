@@ -95,7 +95,7 @@ def baseline_server(payload):
             process.wait(timeout=5)
 
 
-def measure(port, concurrency, requests, keep_alive, expected, pid=None):
+def measure(port, concurrency, requests, keep_alive, expected, pid=None, path="/index.html", headers=None):
     def worker(count):
         client = None
         samples = []
@@ -107,7 +107,7 @@ def measure(port, concurrency, requests, keep_alive, expected, pid=None):
                 try:
                     if client is None:
                         client = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                    client.request("GET", "/index.html", headers={"Connection": "keep-alive" if keep_alive else "close"})
+                    client.request("GET", path, headers={"Connection": "keep-alive" if keep_alive else "close", **(headers or {})})
                     response = client.getresponse()
                     body = response.read()
                     transferred = len(body)

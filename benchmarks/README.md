@@ -45,3 +45,8 @@ to one core and can exceed 100%. RSS is sampled every 50 ms; short peaks can be
 missed and counters have finite precision. Measurements are descriptive, not
 hardware-independent guarantees. Compare the distribution across repeats rather
 than choosing a single best result.
+# Direct backend versus proxy
+
+Run `python3 benchmarks/proxy.py`. The script starts the independent demo backend and frontend, uses four clients, persistent frontend connections, 1 KiB responses, twenty warm-up requests, and three runs of 1,000 attempts. Both cases validate identical bytes. The proxy currently opens a backend connection per exchange.
+
+Recorded median throughput was 11,934.0 requests/s direct and 4,775.1 through the proxy; median p95 was 0.615 ms direct and 1.161 ms proxied. All attempts succeeded. See `results/proxy.json`. CPU/RSS describe each named process separately, excluding the client and other service. This measures overhead for this local workload; it is not a universal ratio.
