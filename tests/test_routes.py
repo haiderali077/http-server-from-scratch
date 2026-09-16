@@ -4,6 +4,26 @@ from tests.support import RunningServer
 
 
 class RouteTests(unittest.TestCase):
+    def test_route_methods_health_and_stream(self):
+        with RunningServer() as server:
+            client = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
+            try:
+                client.request("GET", "/echo")
+                response = client.getresponse()
+                self.assertEqual(response.status, 405)
+                self.assertEqual(response.getheader("Allow"), "POST")
+                response.read()
+                client.request("GET", "/stream")
+                response = client.getresponse()
+                self.assertEqual(response.getheader("Transfer-Encoding"), "chunked")
+                self.assertEqual(response.read(), b"first\nsecond\n")
+                client.request("HEAD", "/health")
+                response = client.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), b"")
+            finally:
+                client.close()
+
     def test_echo_accepts_fixed_and_chunked_binary_bodies(self):
         with RunningServer() as server:
             client = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
