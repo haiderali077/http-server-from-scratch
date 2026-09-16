@@ -315,7 +315,7 @@ class DocumentRootTests(unittest.TestCase):
             listener.accept.side_effect = [(connection, ("127.0.0.1", 1234)), KeyboardInterrupt]
             with self.assertRaises(KeyboardInterrupt):
                 run_server(8080, "public")
-        handle.assert_called_once_with(connection, self.public)
+        self.assertEqual(handle.call_args.args[:2], (connection, self.public))
 
     def test_missing_root_or_file_root_is_rejected_before_socket_creation(self):
         for root in (self.base / "missing", self.public / "index.html"):
@@ -334,13 +334,14 @@ class CLITests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIn(b"webserver.py [-p <port number>] [-d <document root>]", result.stdout)
+                self.assertIn(b"--document-root", result.stdout)
+                self.assertIn(b"--workers", result.stdout)
 
     def test_short_and_long_document_root_options(self):
         for option in ("-d", "--document-root"):
             with self.subTest(option=option), patch("src.webserver.run_server") as run:
                 main(["-p", "8080", option, "public"])
-                run.assert_called_once_with(8080, Path("public"))
+                self.assertEqual(run.call_args.args[:2], (8080, Path("public")))
 
     def test_invalid_root_exits_with_a_clear_error(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,9 +1,12 @@
 """CLI entry point and socket transport for the sequential HTTP server."""
 
-import getopt
+import argparse
 from pathlib import Path
+import signal
 import socket
 import sys
+import threading
+import time
 
 if __package__:
     from .http_request import HTTPError, parse_request
@@ -26,14 +29,15 @@ else:
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 
-def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts()):
+def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts(),
+                      max_requests=100, stop_event=None, application=None):
     """Own one accepted socket: receive, dispatch, send, and close."""
     response_started = False
     waiting_for_idle = False
     reader = SocketReader(connection)
-    application = Application(document_root)
+    application = application or Application(document_root)
     try:
-        for number in range(100):
+        for number in range(max_requests):
             response_started = False
             if number and not reader.buffer:
                 waiting_for_idle = True
@@ -56,7 +60,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             connection_tokens = {value.strip().lower() for value in request.headers.get("connection", "").split(",")}
             keep_alive = (request.version == "HTTP/1.1" and
                           "close" not in connection_tokens and
-                          number < 99)
+                          number < max_requests - 1 and not (stop_event and stop_event.is_set()))
             response = application.dispatch(request)
             response.headers["Connection"] = "keep-alive" if keep_alive else "close"
             response_started = True
@@ -95,55 +99,102 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             pass
 
 
-def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16):
+def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16, *,
+               host="127.0.0.1", limits=Limits(), timeouts=Timeouts(), max_requests=100,
+               shutdown_timeout=2.0, stop_event=None):
     """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
     if not document_root.is_dir():
         raise ValueError("Document root must be an existing directory: {}".format(document_root))
+    if min(limits) < 1 or min(timeouts) <= 0 or max_requests < 1 or shutdown_timeout < 0:
+        raise ValueError("Limits, deadlines, and request counts must be positive")
+    stop_event = stop_event or threading.Event()
+    application = Application(document_root)
+    connections = set()
+    lock = threading.Lock()
+
+    def worker(connection):
+        try:
+            handle_connection(connection, document_root, limits, timeouts,
+                              max_requests, stop_event, application)
+        finally:
+            with lock:
+                connections.discard(connection)
 
     with BoundedPool(workers, queue_size) as pool, socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("", port))
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
         listener.listen(max(1, workers + queue_size))
-        print("Server is running on port", port)
+        listener.settimeout(0.2)
+        print("Server is running on port", listener.getsockname()[1], flush=True)
         print("Document root:", document_root)
-        while True:
-            print("The server is ready to receive data....")
-            connection, address = listener.accept()
-            if not pool.submit(handle_connection, connection, document_root):
+        try:
+            while not stop_event.is_set():
                 try:
-                    connection.settimeout(0.1)
-                    send_response(connection, error_response(503))
+                    connection, address = listener.accept()
+                except socket.timeout:
+                    continue
+                with lock:
+                    connections.add(connection)
+                if not pool.submit(worker, connection):
+                    with lock:
+                        connections.discard(connection)
+                    try:
+                        connection.settimeout(0.1)
+                        send_response(connection, error_response(503))
+                    except OSError:
+                        pass
+                    finally:
+                        connection.close()
+        finally:
+            stop_event.set()
+            deadline = time.monotonic() + shutdown_timeout
+            while time.monotonic() < deadline:
+                with lock:
+                    if not connections:
+                        break
+                time.sleep(0.02)
+            with lock:
+                remaining = list(connections)
+            for connection in remaining:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-                finally:
-                    connection.close()
+                connection.close()
 
 
 def main(argv):
-    port = 6789
-    document_root = DEFAULT_DOCUMENT_ROOT
+    parser = argparse.ArgumentParser(description="Raw-socket HTTP/1.1 server")
+    parser.add_argument("-p", "--port", type=int, default=6789)
+    parser.add_argument("-d", "--document-root", type=Path, default=DEFAULT_DOCUMENT_ROOT)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--queue-size", type=int, default=16)
+    parser.add_argument("--max-headers", type=int, default=32768)
+    parser.add_argument("--max-body", type=int, default=1048576)
+    parser.add_argument("--max-requests", type=int, default=100)
+    parser.add_argument("--shutdown-timeout", type=float, default=2.0)
+    for name, default in zip(("header", "body", "write", "idle"), Timeouts()):
+        parser.add_argument(f"--{name}-timeout", type=float, default=default)
+    args = parser.parse_args(argv)
+    stop = threading.Event()
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for number in (signal.SIGINT, signal.SIGTERM):
+            previous[number] = signal.signal(number, lambda unused, frame: stop.set())
     try:
-        opts, args = getopt.getopt(argv, "hp:d:", ["port=", "document-root="])
-        for opt, arg in opts:
-            if opt == "-h":
-                print(USAGE)
-                print("Default document root:", DEFAULT_DOCUMENT_ROOT)
-                return
-            if opt in ("-p", "--port"):
-                port = int(arg)
-            elif opt in ("-d", "--document-root"):
-                document_root = Path(arg)
-    except (getopt.GetoptError, ValueError) as error:
-        print(error, file=sys.stderr)
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-
-    try:
-        run_server(port, document_root)
+        run_server(args.port, args.document_root, args.workers, args.queue_size, host=args.host,
+                   limits=Limits(args.max_headers, args.max_body),
+                   timeouts=Timeouts(args.header_timeout, args.body_timeout, args.write_timeout, args.idle_timeout),
+                   max_requests=args.max_requests, shutdown_timeout=args.shutdown_timeout, stop_event=stop)
     except ValueError as error:
         print(error, file=sys.stderr)
         sys.exit(2)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 if __name__ == "__main__":
