@@ -77,6 +77,13 @@ def parse_request(message, max_body_bytes=1048576):
             raise HTTPError("Invalid Content-Length")
         if len(length) > 12 or int(length) > max_body_bytes:
             raise HTTPError("Request body exceeds configured limit", 413)
+    if "transfer-encoding" in headers:
+        if "content-length" in headers or parts[2] != "HTTP/1.1":
+            raise HTTPError("Conflicting or unsupported message framing")
+        if headers["transfer-encoding"].lower() != "chunked":
+            raise HTTPError("Only a single chunked transfer coding is supported", 501)
+    if "expect" in headers:
+        raise HTTPError("Expect negotiation is not supported", 417)
 
     path, query = parse_request_target(parts[1])
     return HTTPRequest(
