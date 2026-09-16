@@ -71,6 +71,8 @@ Run `python3 -m src.webserver --help` for all options. [Static cache policy](doc
 
 ## Verify
 
+See [performance evidence and reproducible scripts](docs/PERFORMANCE.md) for recorded throughput, latency, errors, CPU/RSS, proxy overhead, and cache/compression tradeoffs.
+
 ```sh
 python3 -m unittest discover -s tests -v
 ```
