@@ -5,6 +5,24 @@ from tests.support import RunningServer, request_bytes
 
 
 class GzipTests(unittest.TestCase):
+    def test_variant_lengths_head_and_validators(self):
+        with RunningServer() as server:
+            def fields(result):
+                header, body = result.split(b"\r\n\r\n", 1)
+                return {name.lower(): value for name, _, value in (line.partition(b": ") for line in header.split(b"\r\n")[1:])}, body
+            plain, plain_body = fields(server.exchange(request_bytes()))
+            compressed, compressed_body = fields(server.exchange(request_bytes(headers="Accept-Encoding: gzip\r\n")))
+            self.assertNotEqual(plain[b"etag"], compressed[b"etag"])
+            self.assertEqual(int(compressed[b"content-length"]), len(compressed_body))
+            head, body = fields(server.exchange(request_bytes(method="HEAD", headers="Accept-Encoding: gzip\r\n")))
+            self.assertEqual(head[b"content-length"], compressed[b"content-length"])
+            self.assertEqual(body, b"")
+            condition = "If-None-Match: " + compressed[b"etag"].decode() + "\r\n"
+            result = server.exchange(request_bytes(headers="Accept-Encoding: gzip\r\n" + condition))
+            self.assertIn(b"304 Not Modified", result)
+            self.assertIn(b"Vary: Accept-Encoding", result)
+            self.assertTrue(result.endswith(b"\r\n\r\n"))
+            self.assertIn(b"200 OK", server.exchange(request_bytes(headers=condition)))
     def test_quality_values(self):
         self.assertEqual(qualities(None), (0, 1))
         self.assertEqual(qualities("gzip;q=0, identity;q=1"), (0, 1))

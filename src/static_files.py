@@ -157,7 +157,8 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT, cache=None):
             return body
         body = cache.get((str(filename), "identity"), file_signature(stat), load) if cache else load()
         if compressed:
-            body = gzip.compress(body, mtime=0)
+            compress = lambda: gzip.compress(body, mtime=0)
+            body = cache.get((str(filename), "gzip"), file_signature(stat), compress) if cache else compress()
         if request.method == "HEAD":
             response = build_response(200, headers=headers)
             response.headers["Content-Length"] = str(len(body))
