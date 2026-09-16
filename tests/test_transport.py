@@ -30,3 +30,16 @@ class ReaderTests(unittest.TestCase):
         reader = SocketReader(connection)
         self.assertEqual(reader.read_until(b"\r\n\r\n", limit=8), b"head\r\n\r\n")
         self.assertEqual(len(reader.buffer), 80)
+
+    def test_exact_body_reads_fragments_and_preserves_next_request(self):
+        connection = Mock()
+        connection.recv.side_effect = [b"abc", b"deNEXT"]
+        reader = SocketReader(connection)
+        self.assertEqual(reader.read_exact(5), b"abcde")
+        self.assertEqual(reader.buffer, b"NEXT")
+
+    def test_incomplete_body_is_rejected(self):
+        connection = Mock()
+        connection.recv.side_effect = [b"abc", b""]
+        with self.assertRaises(ValueError):
+            SocketReader(connection).read_exact(5)

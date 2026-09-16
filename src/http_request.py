@@ -20,6 +20,7 @@ class HTTPRequest(NamedTuple):
     query: str
     version: str
     headers: Dict[str, str]
+    body: bytes = b""
 
 
 def parse_request_target(target):

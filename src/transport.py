@@ -44,3 +44,20 @@ class SocketReader:
                     raise ValueError("Client disconnected during a message")
                 return b""
             self.buffer.extend(data)
+
+    def read_exact(self, size, limit=1048576, timeout=10.0):
+        if size < 0 or size > limit:
+            raise HTTPError("Body exceeds configured limit", 413)
+        deadline = time.monotonic() + timeout
+        while len(self.buffer) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("Body read deadline exceeded")
+            self.connection.settimeout(remaining)
+            data = self.connection.recv(min(65536, size - len(self.buffer)))
+            if not data:
+                raise HTTPError("Incomplete request body")
+            self.buffer.extend(data)
+        result = bytes(self.buffer[:size])
+        del self.buffer[:size]
+        return result

@@ -5,6 +5,14 @@ from tests.support import request_bytes
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_body_is_consumed_before_next_request(self):
+        with RunningServer() as server:
+            first = b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"
+            wire = server.exchange(first + request_bytes())
+            self.assertEqual(wire.count(b"HTTP/1.1"), 2)
+            self.assertTrue(wire.startswith(b"HTTP/1.1 405"))
+            self.assertTrue(wire.endswith(b"hello"))
+
     def test_pipelined_requests_preserve_bytes_and_response_order(self):
         with RunningServer() as server:
             (server.root / "second.html").write_bytes(b"second response")
