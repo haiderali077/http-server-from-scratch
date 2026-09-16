@@ -1,0 +1,66 @@
+{
+  "timestamp_utc": "2026-09-16T18:40:48.900097+00:00",
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "cpu_count": 10,
+  "python": "3.13.7 (main, Aug 14 2025, 11:12:11) [Clang 17.0.0 (clang-1700.0.13.3)]",
+  "server_commit": "f5893f371821537c101128786214c5b5ca34e543",
+  "generator": "stdlib http.client, clients and server on the same machine",
+  "configuration": {
+    "baseline": false,
+    "connections": 4,
+    "requests": 2000,
+    "repeat": 3,
+    "warmup": 20,
+    "keep_alive": true,
+    "size": "small"
+  },
+  "response_bytes": 1024,
+  "latency_scope": "all attempts, including errors",
+  "warmup": {
+    "attempts": 20,
+    "errors": 0,
+    "error_examples": [],
+    "seconds": 0.0088,
+    "requests_per_second": 2262.8,
+    "p50_ms": 1.356,
+    "p95_ms": 2.729,
+    "p99_ms": 2.729,
+    "payload_bytes": 20480
+  },
+  "runs": [
+    {
+      "attempts": 2000,
+      "errors": 0,
+      "error_examples": [],
+      "seconds": 0.579,
+      "requests_per_second": 3454.4,
+      "p50_ms": 1.077,
+      "p95_ms": 1.76,
+      "p99_ms": 2.281,
+      "payload_bytes": 2048000
+    },
+    {
+      "attempts": 2000,
+      "errors": 0,
+      "error_examples": [],
+      "seconds": 0.5554,
+      "requests_per_second": 3601.2,
+      "p50_ms": 1.075,
+      "p95_ms": 1.609,
+      "p99_ms": 1.989,
+      "payload_bytes": 2048000
+    },
+    {
+      "attempts": 2000,
+      "errors": 0,
+      "error_examples": [],
+      "seconds": 0.5489,
+      "requests_per_second": 3643.5,
+      "p50_ms": 1.051,
+      "p95_ms": 1.606,
+      "p99_ms": 1.903,
+      "payload_bytes": 2048000
+    }
+  ]
+}
