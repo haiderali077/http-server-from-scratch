@@ -2,14 +2,17 @@
 if __package__:
     from .http_response import build_response, chunked_response, error_response
     from .static_files import serve_file
+    from .proxy import Proxy
 else:
     from http_response import build_response, chunked_response, error_response
     from static_files import serve_file
+    from proxy import Proxy
 
 
 class Application:
-    def __init__(self, document_root):
+    def __init__(self, document_root, upstream=None):
         self.document_root = document_root
+        self.proxy = Proxy(upstream) if upstream else None
         self.routes = {
             "/echo": ({"POST"}, self.echo),
             "/health": ({"GET", "HEAD"}, self.health),
@@ -17,6 +20,12 @@ class Application:
         }
 
     def dispatch(self, request):
+        if request.path == "/static" or request.path.startswith("/static/"):
+            return serve_file(request._replace(path=request.path[7:] or "/"), self.document_root)
+        if request.path == "/api" or request.path.startswith("/api/"):
+            if not self.proxy:
+                return error_response(503)
+            return self.proxy.forward(request._replace(path=request.path[4:] or "/"))
         route = self.routes.get(request.path)
         if route:
             allowed, handler = route
