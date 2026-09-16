@@ -103,8 +103,19 @@ class SocketReader:
         deadline = time.monotonic() + timeout
         while size:
             amount = min(size, 16384)
-            yield self.read_exact(amount, limit, max(0, deadline - time.monotonic()))
-            size -= amount
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("Body read deadline exceeded")
+            if self.buffer:
+                data = bytes(self.buffer[:amount])
+                del self.buffer[:len(data)]
+            else:
+                self.connection.settimeout(remaining)
+                data = self.connection.recv(amount)
+                if not data:
+                    raise HTTPError("Incomplete body")
+            size -= len(data)
+            yield data
 
     def iter_chunked(self, limit=1048576, timeout=10.0):
         deadline = time.monotonic() + timeout

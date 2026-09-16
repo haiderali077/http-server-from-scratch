@@ -20,7 +20,10 @@ class RawUpstream:
                     data += chunk
                 time.sleep(owner.delay)
                 try:
-                    self.request.sendall(owner.reply)
+                    if callable(owner.reply):
+                        owner.reply(self.request)
+                    else:
+                        self.request.sendall(owner.reply)
                 except OSError:
                     pass
         class Server(socketserver.ThreadingTCPServer):

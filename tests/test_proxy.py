@@ -22,7 +22,18 @@ class Backend(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.headers.get("Transfer-Encoding") == "chunked":
+            parts = []
+            while True:
+                size = int(self.rfile.readline().strip(), 16)
+                if not size:
+                    self.rfile.readline()
+                    break
+                parts.append(self.rfile.read(size))
+                self.rfile.read(2)
+            body = b"".join(parts)
+        else:
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.server.seen.append((self.command, self.path, dict(self.headers), body))
         self.send_response(201)
         self.send_header("Content-Length", str(len(body)))
