@@ -35,25 +35,23 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(request.headers["if-modified-since"],
                          "Tue, 01 Jan 2030 00:00:00 GMT")
 
-    def test_duplicate_header_uses_first_value_and_body_is_not_headers(self):
-        request = parse_request(
-            "GET / HTTP/1.1\r\nHost: first\r\nhost: second\r\n\r\nFake: body"
-        )
-        self.assertEqual(request.headers, {"host": "first"})
+    def test_duplicate_host_header_is_rejected(self):
+        with self.assertRaises(ValueError):
+            parse_request("GET / HTTP/1.1\r\nHost: first\r\nhost: second\r\n\r\n")
 
     def test_empty_or_missing_path_is_rejected(self):
         for message in ("", "\r\n", "GET"):
             with self.subTest(message=message), self.assertRaises(ValueError):
                 parse_request(message)
 
-    def test_existing_method_and_path_only_subset_is_preserved(self):
-        request = parse_request("GET /")
-        self.assertEqual(request.version, "")
-        self.assertEqual(request.path, "/")
+    def test_version_and_http11_host_are_required(self):
+        for message in ("GET /", "GET / HTTP/1.1\r\n\r\n", "GET / HTTP/2.0\r\nHost: local\r\n\r\n"):
+            with self.subTest(message=message), self.assertRaises(ValueError):
+                parse_request(message)
 
     def test_query_is_separate_from_the_path(self):
         request = parse_request(
-            "GET /nested/index.html?download=1&theme=dark HTTP/1.1\r\n\r\n"
+            "GET /nested/index.html?download=1&theme=dark HTTP/1.1\r\nHost: local\r\n\r\n"
         )
         self.assertEqual(request.path, "/nested/index.html")
         self.assertEqual(request.query, "download=1&theme=dark")
@@ -122,7 +120,7 @@ class StaticFileTests(unittest.TestCase):
         os.utime("index.html", (1600000000, 1600000000))
 
     def request(self, path="/", headers="", method="GET"):
-        return parse_request("{} {} HTTP/1.1\r\n{}\r\n".format(method, path, headers))
+        return parse_request("{} {} HTTP/1.1\r\nHost: local\r\n{}\r\n".format(method, path, headers))
 
     def serve(self, request):
         return serve_file(request, self.document_root)
@@ -255,7 +253,7 @@ class ConnectionTests(unittest.TestCase):
 
     def test_send_failure_closes_without_retrying_a_404(self):
         connection = Mock()
-        connection.recv.return_value = b"POST / HTTP/1.1\r\n\r\n"
+        connection.recv.return_value = b"POST / HTTP/1.1\r\nHost: local\r\n\r\n"
         connection.send.side_effect = BrokenPipeError("disconnected")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             handle_connection(connection)
@@ -282,7 +280,7 @@ class DocumentRootTests(unittest.TestCase):
 
     def test_default_root_ignores_working_directory(self):
         os.chdir(self.launch_directory)
-        response = serve_file(parse_request("GET / HTTP/1.1\r\n\r\n"))
+        response = serve_file(parse_request("GET / HTTP/1.1\r\nHost: local\r\n\r\n"))
         self.assertEqual(response.status, 200)
         self.assertEqual(DEFAULT_DOCUMENT_ROOT, PROJECT_ROOT / "src")
         self.assertEqual(response.body,
@@ -293,7 +291,7 @@ class DocumentRootTests(unittest.TestCase):
         for route, expected in (("/", b"custom root"), ("/page", b"custom page"),
                                 ("/nested", b"custom nested"), ("/nested/", b"custom nested")):
             with self.subTest(route=route):
-                response = serve_file(parse_request("GET {} HTTP/1.1".format(route)), self.public)
+                response = serve_file(parse_request("GET {} HTTP/1.1\r\nHost: local\r\n\r\n".format(route)), self.public)
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.body, expected)
 
