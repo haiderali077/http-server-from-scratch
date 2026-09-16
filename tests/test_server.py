@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 
 from src.http_request import parse_request, parse_request_target
 from src.http_response import build_response, error_response, format_http_date
-from src.static_files import DEFAULT_DOCUMENT_ROOT, serve_file
+from src.static_files import DEFAULT_DOCUMENT_ROOT, PathOutsideDocumentRoot, resolve_filename, serve_file
 from src.webserver import handle_connection, main, run_server
 
 
@@ -153,6 +153,35 @@ class StaticFileTests(unittest.TestCase):
         response = self.serve(self.request("/café.html?download=1"))
         self.assertEqual(response.status, 200)
         self.assertEqual(response.body, b"encoded path")
+
+    def test_parent_directory_paths_are_forbidden_after_percent_decoding(self):
+        outside_file = self.document_root.parent / "private.txt"
+        outside_file.write_text("private", encoding="utf-8")
+        self.addCleanup(outside_file.unlink)
+        for path in ("/../private.txt", "/nested/../../private.txt", "/%2e%2e/private.txt"):
+            with self.subTest(path=path):
+                response = self.serve(self.request(path))
+                self.assertEqual(response.status, 403)
+                self.assertNotIn(b"private", response.body)
+
+    def test_external_symlink_is_forbidden_but_internal_one_is_served(self):
+        outside_file = self.document_root.parent / "private.html"
+        outside_file.write_text("private", encoding="utf-8")
+        self.addCleanup(outside_file.unlink)
+        external_link = self.document_root / "external.html"
+        external_link.symlink_to(outside_file)
+        self.addCleanup(external_link.unlink)
+        Path("real.html").write_text("public", encoding="utf-8")
+        Path("internal.html").symlink_to("real.html")
+
+        self.assertEqual(self.serve(self.request("/external.html")).status, 403)
+        response = self.serve(self.request("/internal.html"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, b"public")
+
+    def test_resolver_reports_an_escape_before_file_access(self):
+        with self.assertRaises(PathOutsideDocumentRoot):
+            resolve_filename("/../private.txt", self.document_root)
 
     def test_conditional_get_returns_not_modified(self):
         date = format_http_date(1600000000)

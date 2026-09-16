@@ -16,7 +16,7 @@ A lightweight HTTP/1.1 web server implementation built from scratch in Python us
 - **Multi-Format Support**: Serves HTML, CSS, JavaScript, JSON, and common image formats (PNG, JPG, GIF)
 - **Conditional GET Requests**: Implements `If-Modified-Since` header for efficient caching (304 Not Modified responses)
 - **RESTful HTTP Methods**: Validates request methods with appropriate 405 responses
-- **Error Handling**: Returns proper HTTP status codes (200, 304, 404, 405, 415)
+- **Error Handling**: Returns proper HTTP status codes (200, 304, 403, 404, 405, 415)
 - **Security**: Path traversal protection and unsupported media type filtering
 - **Smart Routing**: Automatic `index.html` resolution for directory requests
 
@@ -62,10 +62,8 @@ run_server() accepts a TCP connection
 
 The server currently provides a GET-only, sequential service with a configurable
 document root that defaults to `src/`, independently of the launch directory.
-Incremental reads, strict validation,
-safe document-root containment, complete-write handling, and persistent
-connections remain future work. The current `..` replacement is not sufficient
-path traversal protection.
+Incremental reads, strict validation, complete-write handling, and persistent
+connections remain future work.
 
 ## Project Structure
 
@@ -148,12 +146,13 @@ directory using an absolute script path. From the repository root,
 ### Status Codes Handled
 - **200 OK**: Successful resource retrieval
 - **304 Not Modified**: Cached resource validation
+- **403 Forbidden**: Resource path escapes the configured document root
 - **404 Not Found**: Missing resource handling
 - **405 Method Not Allowed**: Invalid HTTP method rejection
 - **415 Unsupported Media Type**: File type filtering
 
 ### Security Features
-- Path traversal attack prevention (`..` removal)
+- Document-root containment after path resolution, including symlink escapes
 - Whitelist-based file type validation
 - Method validation (GET-only by design)
 
@@ -168,8 +167,9 @@ python3 -m unittest discover -s tests -v
 These cover parsing, response framing, static routes, binary content, conditional
 GET, error responses, socket cleanup, a real socket round trip, document-root
 selection and validation, and both CLI entry points. TCP launch tests verify
-default and custom roots from an unrelated working directory. The tests use only
-the Python standard library.
+default and custom roots from an unrelated working directory. They also reject
+path and symlink escapes from the document root. The tests use only the Python
+standard library.
 
 Test the server's functionality:
 

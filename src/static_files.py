@@ -28,17 +28,17 @@ BINARY_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"}
 DEFAULT_DOCUMENT_ROOT = Path(__file__).resolve().parent
 
 
+class PathOutsideDocumentRoot(ValueError):
+    """Raised when a requested resource resolves outside the document root."""
+
+
 def get_content_type(filename):
     return CONTENT_TYPES.get(os.path.splitext(filename)[1], "application/octet-stream")
 
 
 def resolve_filename(path, document_root=DEFAULT_DOCUMENT_ROOT):
-    """Apply the existing route rules relative to the configured document root.
-
-    Safe path containment is an upcoming roadmap item. Replacing '..' is
-    retained for compatibility, not considered secure.
-    """
-    document_root = Path(document_root)
+    """Map a URL path to a local path contained by the document root."""
+    document_root = Path(document_root).resolve()
     filename = "index.html" if path in ("/", "") else path.lstrip("/")
     if filename.endswith("/"):
         filename += "index.html"
@@ -53,7 +53,12 @@ def resolve_filename(path, document_root=DEFAULT_DOCUMENT_ROOT):
         else:
             filename += ".html"
 
-    return document_root / filename.replace("..", "")
+    candidate = (document_root / filename).resolve()
+    try:
+        candidate.relative_to(document_root)
+    except ValueError as error:
+        raise PathOutsideDocumentRoot("Requested path escapes the document root") from error
+    return candidate
 
 
 def is_not_modified(last_modified, if_modified_since):
@@ -96,6 +101,8 @@ def serve_file(request, document_root=DEFAULT_DOCUMENT_ROOT):
 
         headers["Content-Type"] = get_content_type(filename)
         return build_response(200, body, headers)
+    except PathOutsideDocumentRoot:
+        return error_response(403)
     except OSError:
         # File access failures belong here, not in the socket transport layer.
         return error_response(404)
