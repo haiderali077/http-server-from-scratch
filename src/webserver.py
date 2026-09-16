@@ -24,11 +24,13 @@ USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits()):
     """Own one accepted socket: receive, dispatch, send, and close."""
+    response_started = False
     try:
         message = SocketReader(connection).read_until(b"\r\n\r\n", limits.header_bytes).decode("iso-8859-1")
         request = parse_request(message, limits.body_bytes)
 
         response = serve_file(request, document_root)
+        response_started = True
         send_response(connection, response)
     except HTTPError as error:
         response = error_response(error.status)
@@ -39,8 +41,18 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
     except (OSError, ValueError) as error:
         # A failed connection cannot reliably receive a file error response.
         print("Connection error: {}".format(error), file=sys.stderr)
+    except Exception as error:
+        print("Handler error: {}".format(error), file=sys.stderr)
+        if not response_started:
+            try:
+                send_response(connection, error_response(500))
+            except OSError:
+                pass
     finally:
-        connection.close()
+        try:
+            connection.close()
+        except OSError:
+            pass
 
 
 def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT):

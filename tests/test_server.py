@@ -235,6 +235,15 @@ class StaticFileTests(unittest.TestCase):
 
 
 class ConnectionTests(unittest.TestCase):
+    def test_unexpected_handler_error_returns_500_and_closes(self):
+        connection = Mock()
+        connection.recv.return_value = b"GET / HTTP/1.1\r\nHost: local\r\n\r\n"
+        with patch("src.webserver.serve_file", side_effect=RuntimeError("handler failed")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            handle_connection(connection)
+        self.assertIn(b"500 Internal Server Error", connection.sendall.call_args_list[0].args[0])
+        connection.close.assert_called_once_with()
+
     def test_invalid_request_closes_without_sending(self):
         connection = Mock()
         connection.recv.side_effect = [b"GET", b""]
