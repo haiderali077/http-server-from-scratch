@@ -1,4 +1,6 @@
 import unittest
+import socket
+from unittest.mock import patch
 from src.proxy import response_header, response_body
 from src.transport import SocketReader
 from src.proxy import response_chunks
@@ -16,6 +18,12 @@ class BytesSocket:
 
 
 class UpstreamProtocolTests(unittest.TestCase):
+    def test_total_header_deadline(self):
+        reader = SocketReader(BytesSocket(b"HTTP/1.1 100 Continue\r\n\r\n"))
+        with patch("src.proxy.time.monotonic", side_effect=[0, 0, 0, 0, 2, 2, 2]):
+            with self.assertRaises(socket.timeout):
+                response_header(reader, 1)
+
     def decode(self, raw, method="GET"):
         reader = SocketReader(BytesSocket(raw))
         status, headers = response_header(reader)

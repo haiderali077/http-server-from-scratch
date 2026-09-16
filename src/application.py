@@ -10,9 +10,9 @@ else:
 
 
 class Application:
-    def __init__(self, document_root, upstream=None):
+    def __init__(self, document_root, upstream=None, proxy_options=None):
         self.document_root = document_root
-        self.proxy = Proxy(upstream) if upstream else None
+        self.proxy = Proxy(upstream, **(proxy_options or {})) if upstream else None
         self.routes = {
             "/echo": ({"POST"}, self.echo),
             "/health": ({"GET", "HEAD"}, self.health),

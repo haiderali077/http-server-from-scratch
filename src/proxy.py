@@ -1,6 +1,7 @@
 """A configured HTTP upstream reached through raw TCP sockets."""
 import socket
 import re
+import time
 from urllib.parse import quote, urlsplit
 
 if __package__:
@@ -25,8 +26,9 @@ def end_to_end_headers(headers):
 
 def response_header(reader, timeout=5):
     """Strict response framing before any bytes are committed downstream."""
+    deadline = time.monotonic() + timeout
     for _ in range(9):
-        raw = reader.read_until(b"\r\n\r\n", timeout=timeout)
+        raw = reader.read_until(b"\r\n\r\n", timeout=max(0, deadline - time.monotonic()))
         lines = raw.decode("iso-8859-1").split("\r\n")
         match = re.fullmatch(r"HTTP/1\.[01] ([1-5][0-9]{2})(?: [^\r\n]*)?", lines[0])
         if not match:
@@ -107,7 +109,10 @@ class UpstreamBody:
 
 
 class Proxy:
-    def __init__(self, url):
+    def __init__(self, url, connect_timeout=2.0, response_timeout=10.0):
+        if min(connect_timeout, response_timeout) <= 0:
+            raise ValueError("Upstream timeouts must be positive")
+        self.connect_timeout, self.response_timeout = connect_timeout, response_timeout
         parsed = urlsplit(url)
         if (parsed.scheme != "http" or not parsed.hostname or parsed.username or
                 parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
@@ -119,8 +124,9 @@ class Proxy:
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
         if request.query:
             path += "?" + request.query
-        connection = socket.create_connection((self.host, self.port), timeout=5)
+        connection = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
         try:
+            connection.settimeout(self.response_timeout)
             fields = end_to_end_headers(request.headers)
             fields.pop("host", None)
             fields.pop("content-length", None)
@@ -143,7 +149,7 @@ class Proxy:
             if chunked:
                 connection.sendall(b"0\r\n\r\n")
             reader = SocketReader(connection)
-            status, headers = response_header(reader)
+            status, headers = response_header(reader, self.response_timeout)
             forwarded = {name.title(): value for name, value in end_to_end_headers(headers).items() if name not in {"content-length", "server", "date"}}
             response = build_response(status, headers=forwarded)
             if "content-length" in headers and status != 204 and status != 304:
@@ -151,7 +157,7 @@ class Proxy:
             elif request.method != "HEAD" and status not in (204, 304):
                 response.headers.pop("Content-Length", None)
                 response.headers["Transfer-Encoding"] = "chunked"
-            body = UpstreamBody(connection, response_chunks(reader, request, status, headers))
+            body = UpstreamBody(connection, response_chunks(reader, request, status, headers, self.response_timeout))
             return response._replace(body=body)
         except BaseException:
             connection.close()

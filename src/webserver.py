@@ -113,7 +113,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
 
 def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16, *,
                host="127.0.0.1", limits=Limits(), timeouts=Timeouts(), max_requests=100,
-               shutdown_timeout=2.0, stop_event=None, upstream=None):
+               shutdown_timeout=2.0, stop_event=None, upstream=None, proxy_options=None):
     """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
@@ -122,7 +122,7 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
     if min(limits) < 1 or min(timeouts) <= 0 or max_requests < 1 or shutdown_timeout < 0:
         raise ValueError("Limits, deadlines, and request counts must be positive")
     stop_event = stop_event or threading.Event()
-    application = Application(document_root, upstream)
+    application = Application(document_root, upstream, proxy_options)
     connections = set()
     lock = threading.Lock()
 
@@ -183,6 +183,8 @@ def main(argv):
     parser.add_argument("-d", "--document-root", type=Path, default=DEFAULT_DOCUMENT_ROOT)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--upstream", help="HTTP backend origin for /api/*")
+    parser.add_argument("--upstream-connect-timeout", type=float, default=2.0)
+    parser.add_argument("--upstream-response-timeout", type=float, default=10.0)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--queue-size", type=int, default=16)
     parser.add_argument("--max-headers", type=int, default=32768)
@@ -202,7 +204,8 @@ def main(argv):
                    limits=Limits(args.max_headers, args.max_body),
                    timeouts=Timeouts(args.header_timeout, args.body_timeout, args.write_timeout, args.idle_timeout),
                    max_requests=args.max_requests, shutdown_timeout=args.shutdown_timeout, stop_event=stop,
-                   upstream=args.upstream)
+                   upstream=args.upstream, proxy_options={"connect_timeout": args.upstream_connect_timeout,
+                                                        "response_timeout": args.upstream_response_timeout})
     except ValueError as error:
         print(error, file=sys.stderr)
         sys.exit(2)
