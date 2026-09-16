@@ -8,9 +8,11 @@ import sys
 if __package__:
     from .http_request import parse_request
     from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
+    from .transport import SocketReader
 else:
     from http_request import parse_request
     from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
+    from transport import SocketReader
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
@@ -19,8 +21,7 @@ USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT):
     """Own one accepted socket: receive, dispatch, send, and close."""
     try:
-        # Incremental reads and full-write handling remain separate TODO items.
-        message = connection.recv(1024).decode("utf-8")
+        message = SocketReader(connection).read_until(b"\r\n\r\n").decode("iso-8859-1")
         print(message)
         try:
             request = parse_request(message)
@@ -31,7 +32,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT):
         connection.send(response.header_bytes())
         if response.body:
             connection.send(response.body)
-    except OSError as error:
+    except (OSError, ValueError) as error:
         # A failed connection cannot reliably receive a file error response.
         print("Connection error: {}".format(error), file=sys.stderr)
     finally:

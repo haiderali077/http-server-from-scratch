@@ -239,7 +239,7 @@ class StaticFileTests(unittest.TestCase):
 class ConnectionTests(unittest.TestCase):
     def test_invalid_request_closes_without_sending(self):
         connection = Mock()
-        connection.recv.return_value = b"GET"
+        connection.recv.side_effect = [b"GET", b""]
         with contextlib.redirect_stdout(io.StringIO()):
             handle_connection(connection)
         connection.send.assert_not_called()
