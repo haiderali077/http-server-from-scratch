@@ -45,8 +45,10 @@ run_server() accepts a TCP connection
 ```
 
 - `http_request.py` parses the method, path, version, and headers. Header names
-  are stored in lowercase for case-insensitive lookup. The parser performs no
-  socket or file operations.
+  are stored in lowercase for case-insensitive lookup. It separates query text
+  from the path and percent-decodes the path once before file lookup. Query text
+  remains raw for future route-specific handling. The parser performs no socket
+  or file operations.
 - `http_response.py` defines response data and builds common headers and HTML
   errors. Bodies are bytes, so Content-Length measures the transmitted payload.
   The serializer adds the HTTP status line, CRLF-separated headers, and the
@@ -58,8 +60,9 @@ run_server() accepts a TCP connection
   `finally` block. Transport failures are handled here rather than interpreted
   as missing files.
 
-This refactor preserves the current GET-only, sequential service and
-working-directory-relative file lookup. Incremental reads, strict validation,
+The server currently provides a GET-only, sequential service with a configurable
+document root that defaults to `src/`, independently of the launch directory.
+Incremental reads, strict validation,
 safe document-root containment, complete-write handling, and persistent
 connections remain future work. The current `..` replacement is not sufficient
 path traversal protection.
@@ -94,14 +97,21 @@ src/
 
 **Default port (6789):**
 ```bash
-cd src
-python webserver.py
+python src/webserver.py
 ```
 
 **Custom port:**
 ```bash
-python webserver.py -p 8080
+python src/webserver.py -p 8080
 ```
+
+**Serve a different directory:**
+```bash
+python src/webserver.py -p 8080 --document-root ./public
+```
+
+The directory must already exist. Relative custom paths are resolved against the
+launch directory once at startup; absolute paths can also be supplied.
 
 ### Access the Server
 
@@ -113,14 +123,16 @@ Once running, navigate to:
 ### Command-Line Options
 
 ```bash
-python webserver.py -h              # Display help (from src/)
-python webserver.py -p <port>       # Specify custom port (from src/)
+python src/webserver.py -h                       # Display help
+python src/webserver.py -p <port>                 # Specify custom port
+python src/webserver.py -d <directory>            # Specify document root
+python src/webserver.py --document-root <directory>
 ```
 
-Files currently resolve relative to the working directory, so run from `src/`
-to serve the included demo files. From the repository root,
-`python -m src.webserver -p 8080` also starts the server, but serves files relative
-to that root. A configurable document root is the next roadmap item.
+The default root comes from the location of `static_files.py`, so it remains
+`src/` whether launched from the repository root, from `src/`, or from another
+directory using an absolute script path. From the repository root,
+`python -m src.webserver -p 8080` uses the same default root.
 
 ## Technical Highlights
 
@@ -154,8 +166,10 @@ python3 -m unittest discover -s tests -v
 ```
 
 These cover parsing, response framing, static routes, binary content, conditional
-GET, error responses, socket cleanup, a real socket round trip, and both CLI
-entry points. They use only the Python standard library.
+GET, error responses, socket cleanup, a real socket round trip, document-root
+selection and validation, and both CLI entry points. TCP launch tests verify
+default and custom roots from an unrelated working directory. The tests use only
+the Python standard library.
 
 Test the server's functionality:
 

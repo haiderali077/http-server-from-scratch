@@ -1,18 +1,22 @@
 """CLI entry point and socket transport for the sequential HTTP server."""
 
 import getopt
+from pathlib import Path
 import socket
 import sys
 
 if __package__:
     from .http_request import parse_request
-    from .static_files import serve_file
+    from .static_files import DEFAULT_DOCUMENT_ROOT, serve_file
 else:
     from http_request import parse_request
-    from static_files import serve_file
+    from static_files import DEFAULT_DOCUMENT_ROOT, serve_file
 
 
-def handle_connection(connection):
+USAGE = "webserver.py [-p <port number>] [-d <document root>]"
+
+
+def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT):
     """Own one accepted socket: receive, dispatch, send, and close."""
     try:
         # Incremental reads and full-write handling remain separate TODO items.
@@ -23,7 +27,7 @@ def handle_connection(connection):
         except ValueError:
             return
 
-        response = serve_file(request)
+        response = serve_file(request, document_root)
         connection.send(response.header_bytes())
         if response.body:
             connection.send(response.body)
@@ -34,34 +38,48 @@ def handle_connection(connection):
         connection.close()
 
 
-def run_server(port):
+def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT):
     """Accept connections sequentially and delegate their request lifecycle."""
+    # Resolve a relative CLI path once, before accepting any connections.
+    document_root = Path(document_root).resolve()
+    if not document_root.is_dir():
+        raise ValueError("Document root must be an existing directory: {}".format(document_root))
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("", port))
         listener.listen(1)
         print("Server is running on port", port)
+        print("Document root:", document_root)
         while True:
             print("The server is ready to receive data....")
             connection, address = listener.accept()
-            handle_connection(connection)
+            handle_connection(connection, document_root)
 
 
 def main(argv):
     port = 6789
+    document_root = DEFAULT_DOCUMENT_ROOT
     try:
-        opts, args = getopt.getopt(argv, "hp:", ["port="])
-    except getopt.GetoptError:
-        print("webserver.py -p <port number>")
+        opts, args = getopt.getopt(argv, "hp:d:", ["port=", "document-root="])
+        for opt, arg in opts:
+            if opt == "-h":
+                print(USAGE)
+                print("Default document root:", DEFAULT_DOCUMENT_ROOT)
+                return
+            if opt in ("-p", "--port"):
+                port = int(arg)
+            elif opt in ("-d", "--document-root"):
+                document_root = Path(arg)
+    except (getopt.GetoptError, ValueError) as error:
+        print(error, file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         sys.exit(2)
 
-    for opt, arg in opts:
-        if opt == "-h":
-            print("webserver.py -p <port number>")
-            return
-        if opt in ("-p", "--port"):
-            port = int(arg)
-
-    run_server(port)
+    try:
+        run_server(port, document_root)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

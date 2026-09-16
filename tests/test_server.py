@@ -9,13 +9,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
-from src.http_request import parse_request
+from src.http_request import parse_request, parse_request_target
 from src.http_response import build_response, error_response, format_http_date
-from src.static_files import serve_file
-from src.webserver import handle_connection
+from src.static_files import DEFAULT_DOCUMENT_ROOT, serve_file
+from src.webserver import handle_connection, main, run_server
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ class RequestTests(unittest.TestCase):
         )
         self.assertEqual((request.method, request.path, request.version),
                          ("GET", "/nested/", "HTTP/1.1"))
+        self.assertEqual(request.query, "")
         self.assertEqual(request.headers["host"], "localhost:6789")
         self.assertEqual(request.headers["if-modified-since"],
                          "Tue, 01 Jan 2030 00:00:00 GMT")
@@ -48,6 +50,32 @@ class RequestTests(unittest.TestCase):
         request = parse_request("GET /")
         self.assertEqual(request.version, "")
         self.assertEqual(request.path, "/")
+
+    def test_query_is_separate_from_the_path(self):
+        request = parse_request(
+            "GET /nested/index.html?download=1&theme=dark HTTP/1.1\r\n\r\n"
+        )
+        self.assertEqual(request.path, "/nested/index.html")
+        self.assertEqual(request.query, "download=1&theme=dark")
+
+    def test_path_is_percent_decoded_once_and_query_remains_raw(self):
+        path, query = parse_request_target("/caf%C3%A9.html?label=caf%C3%A9")
+        self.assertEqual(path, "/café.html")
+        self.assertEqual(query, "label=caf%C3%A9")
+
+    def test_plus_is_literal_in_a_path_and_only_first_question_mark_splits(self):
+        path, query = parse_request_target("/a+b.html?first=yes?second=yes")
+        self.assertEqual(path, "/a+b.html")
+        self.assertEqual(query, "first=yes?second=yes")
+
+    def test_invalid_percent_sequences_are_rejected(self):
+        for target in ("/file%", "/file%2", "/file%ZZ", "/file?value=%no"):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "percent"):
+                parse_request_target(target)
+
+    def test_invalid_utf8_percent_encoded_path_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "UTF-8"):
+            parse_request_target("/%FF.html")
 
 
 class ResponseTests(unittest.TestCase):
@@ -83,9 +111,11 @@ class StaticFileTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(os.chdir, self.original_directory)
+        self.document_root = Path(self.directory.name).resolve()
         os.chdir(self.directory.name)
         Path("index.html").write_text("hello café", encoding="utf-8")
         Path("page.htm").write_text("page", encoding="utf-8")
+        Path("café.html").write_text("encoded path", encoding="utf-8")
         Path("nested").mkdir()
         Path("nested/index.html").write_text("nested", encoding="utf-8")
         Path("test.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
@@ -94,31 +124,39 @@ class StaticFileTests(unittest.TestCase):
     def request(self, path="/", headers="", method="GET"):
         return parse_request("{} {} HTTP/1.1\r\n{}\r\n".format(method, path, headers))
 
+    def serve(self, request):
+        return serve_file(request, self.document_root)
+
     def test_root_directory_and_extension_fallback_routes(self):
         for path, expected in (("/", "hello café"), ("/index", "hello café"),
                                ("/page", "page"), ("/nested", "nested"),
                                ("/nested/", "nested")):
             with self.subTest(path=path):
-                response = serve_file(self.request(path))
+                response = self.serve(self.request(path))
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.body, expected.encode("utf-8"))
                 self.assertEqual(response.headers["Content-Type"], "text/html")
 
     def test_binary_file_bytes_are_preserved(self):
-        response = serve_file(self.request("/test.png"))
+        response = self.serve(self.request("/test.png"))
         self.assertEqual(response.body, Path("test.png").read_bytes())
         self.assertEqual(response.headers["Content-Type"], "image/png")
 
     def test_existing_errors_and_allow_header(self):
-        self.assertEqual(serve_file(self.request("/missing.html")).status, 404)
-        self.assertEqual(serve_file(self.request("/missing.txt")).status, 415)
-        response = serve_file(self.request(method="POST"))
+        self.assertEqual(self.serve(self.request("/missing.html")).status, 404)
+        self.assertEqual(self.serve(self.request("/missing.txt")).status, 415)
+        response = self.serve(self.request(method="POST"))
         self.assertEqual(response.status, 405)
         self.assertEqual(response.headers["Allow"], "GET")
 
+    def test_query_does_not_change_static_file_lookup(self):
+        response = self.serve(self.request("/café.html?download=1"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, b"encoded path")
+
     def test_conditional_get_returns_not_modified(self):
         date = format_http_date(1600000000)
-        response = serve_file(self.request(headers="If-Modified-Since: " + date))
+        response = self.serve(self.request(headers="If-Modified-Since: " + date))
         self.assertEqual(response.status, 304)
         self.assertEqual(response.body, b"")
         self.assertEqual(response.headers["Last-Modified"], date)
@@ -126,13 +164,13 @@ class StaticFileTests(unittest.TestCase):
     def test_old_or_invalid_cache_date_returns_content(self):
         for date in (format_http_date(1500000000), "invalid date"):
             with self.subTest(date=date):
-                response = serve_file(self.request(headers="If-Modified-Since: " + date))
+                response = self.serve(self.request(headers="If-Modified-Since: " + date))
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.body, "hello café".encode("utf-8"))
 
     def test_file_access_error_builds_normal_404_response(self):
         with patch("src.static_files.open", side_effect=PermissionError("denied")):
-            response = serve_file(self.request())
+            response = self.serve(self.request())
         self.assertEqual(response.status, 404)
         self.assertEqual(int(response.headers["Content-Length"]), len(response.body))
 
@@ -143,7 +181,7 @@ class StaticFileTests(unittest.TestCase):
 
         def worker():
             try:
-                handle_connection(server)
+                handle_connection(server, self.document_root)
             except Exception as error:
                 worker_errors.append(error)
 
@@ -196,6 +234,60 @@ class ConnectionTests(unittest.TestCase):
         connection.close.assert_called_once_with()
 
 
+class DocumentRootTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.original_directory = os.getcwd()
+        self.addCleanup(os.chdir, self.original_directory)
+        self.base = Path(self.directory.name).resolve()
+        self.public = self.base / "public"
+        self.public.mkdir()
+        (self.public / "index.html").write_text("custom root", encoding="utf-8")
+        (self.public / "page.htm").write_text("custom page", encoding="utf-8")
+        (self.public / "nested").mkdir()
+        (self.public / "nested/index.html").write_text("custom nested", encoding="utf-8")
+        self.launch_directory = self.base / "launch"
+        self.launch_directory.mkdir()
+        (self.launch_directory / "index.html").write_text("wrong root", encoding="utf-8")
+
+    def test_default_root_ignores_working_directory(self):
+        os.chdir(self.launch_directory)
+        response = serve_file(parse_request("GET / HTTP/1.1\r\n\r\n"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(DEFAULT_DOCUMENT_ROOT, PROJECT_ROOT / "src")
+        self.assertEqual(response.body,
+                         (PROJECT_ROOT / "src/index.html").read_text(encoding="utf-8").encode("utf-8"))
+
+    def test_custom_root_and_fallbacks_ignore_working_directory(self):
+        os.chdir(self.launch_directory)
+        for route, expected in (("/", b"custom root"), ("/page", b"custom page"),
+                                ("/nested", b"custom nested"), ("/nested/", b"custom nested")):
+            with self.subTest(route=route):
+                response = serve_file(parse_request("GET {} HTTP/1.1".format(route)), self.public)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.body, expected)
+
+    def test_server_resolves_relative_root_before_dispatch(self):
+        os.chdir(self.base)
+        connection = Mock()
+        with patch("src.webserver.socket.socket") as factory, \
+                patch("src.webserver.handle_connection") as handle, \
+                contextlib.redirect_stdout(io.StringIO()):
+            listener = factory.return_value.__enter__.return_value
+            listener.accept.side_effect = [(connection, ("127.0.0.1", 1234)), KeyboardInterrupt]
+            with self.assertRaises(KeyboardInterrupt):
+                run_server(8080, "public")
+        handle.assert_called_once_with(connection, self.public)
+
+    def test_missing_root_or_file_root_is_rejected_before_socket_creation(self):
+        for root in (self.base / "missing", self.public / "index.html"):
+            with self.subTest(root=root), patch("src.webserver.socket.socket") as factory:
+                with self.assertRaisesRegex(ValueError, "existing directory"):
+                    run_server(8080, root)
+                factory.assert_not_called()
+
+
 class CLITests(unittest.TestCase):
     def test_script_and_module_entry_points(self):
         for arguments in (("src/webserver.py", "-h"), ("-m", "src.webserver", "-h")):
@@ -205,7 +297,70 @@ class CLITests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIn(b"webserver.py -p <port number>", result.stdout)
+                self.assertIn(b"webserver.py [-p <port number>] [-d <document root>]", result.stdout)
+
+    def test_short_and_long_document_root_options(self):
+        for option in ("-d", "--document-root"):
+            with self.subTest(option=option), patch("src.webserver.run_server") as run:
+                main(["-p", "8080", option, "public"])
+                run.assert_called_once_with(8080, Path("public"))
+
+    def test_invalid_root_exits_with_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / "src/webserver.py"),
+                 "--document-root", str(Path(directory) / "missing")],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"Document root must be an existing directory", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_tcp_launch_from_another_directory_with_default_and_custom_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            public = base / "public"
+            public.mkdir()
+            (public / "index.html").write_text("custom TCP response", encoding="utf-8")
+            launch = base / "launch"
+            launch.mkdir()
+            default_body = (PROJECT_ROOT / "src/index.html").read_text(encoding="utf-8").encode("utf-8")
+            for arguments, expected in (([], default_body),
+                                        (["--document-root", "../public"], b"custom TCP response")):
+                with self.subTest(arguments=arguments):
+                    with socket.socket() as probe:
+                        probe.bind(("127.0.0.1", 0))
+                        port = probe.getsockname()[1]
+                    process = subprocess.Popen(
+                        [sys.executable, str(PROJECT_ROOT / "src/webserver.py"),
+                         "-p", str(port)] + arguments,
+                        cwd=str(launch), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    )
+                    try:
+                        client = None
+                        deadline = time.monotonic() + 3
+                        while time.monotonic() < deadline and process.poll() is None:
+                            try:
+                                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                                break
+                            except OSError:
+                                time.sleep(0.02)
+                        self.assertIsNotNone(client, "Server did not start")
+                        with client:
+                            client.settimeout(2)
+                            client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                            wire = b""
+                            while True:
+                                chunk = client.recv(4096)
+                                if not chunk:
+                                    break
+                                wire += chunk
+                        headers, body = wire.split(b"\r\n\r\n", 1)
+                        self.assertTrue(headers.startswith(b"HTTP/1.1 200 OK\r\n"))
+                        self.assertEqual(body, expected)
+                    finally:
+                        process.terminate()
+                        process.communicate(timeout=5)
 
 
 if __name__ == "__main__":
