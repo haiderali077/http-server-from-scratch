@@ -27,14 +27,34 @@ USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts()):
     """Own one accepted socket: receive, dispatch, send, and close."""
     response_started = False
+    waiting_for_idle = False
+    reader = SocketReader(connection)
     try:
-        message = SocketReader(connection).read_until(b"\r\n\r\n", limits.header_bytes, timeout=timeouts.header).decode("iso-8859-1")
-        request = parse_request(message, limits.body_bytes)
-
-        response = serve_file(request, document_root)
-        response_started = True
-        connection.settimeout(timeouts.write)
-        send_response(connection, response)
+        for number in range(100):
+            response_started = False
+            if number and not reader.buffer:
+                waiting_for_idle = True
+                connection.settimeout(timeouts.idle)
+                data = connection.recv(4096)
+                if not data:
+                    return
+                reader.buffer.extend(data)
+                waiting_for_idle = False
+            header = reader.read_until(b"\r\n\r\n", limits.header_bytes, timeout=timeouts.header)
+            if not header:
+                return
+            request = parse_request(header.decode("iso-8859-1"), limits.body_bytes)
+            keep_alive = (request.version == "HTTP/1.1" and
+                          "close" not in request.headers.get("connection", "").lower().split(",") and
+                          not int(request.headers.get("content-length", "0")) and
+                          "transfer-encoding" not in request.headers and number < 99)
+            response = serve_file(request, document_root)
+            response.headers["Connection"] = "keep-alive" if keep_alive else "close"
+            response_started = True
+            connection.settimeout(timeouts.write)
+            send_response(connection, response)
+            if not keep_alive:
+                return
     except HTTPError as error:
         response = error_response(error.status)
         try:
@@ -43,7 +63,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
         except OSError:
             pass
     except socket.timeout:
-        if not response_started:
+        if not response_started and not waiting_for_idle:
             try:
                 connection.settimeout(timeouts.write)
                 send_response(connection, error_response(408))

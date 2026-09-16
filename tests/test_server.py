@@ -217,7 +217,7 @@ class StaticFileTests(unittest.TestCase):
         with client, contextlib.redirect_stdout(io.StringIO()):
             thread.start()
             try:
-                client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
                 wire = b""
                 while True:
                     chunk = client.recv(4096)
@@ -385,7 +385,7 @@ class CLITests(unittest.TestCase):
                         self.assertIsNotNone(client, "Server did not start")
                         with client:
                             client.settimeout(2)
-                            client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                            client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
                             wire = b""
                             while True:
                                 chunk = client.recv(4096)
