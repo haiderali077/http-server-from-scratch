@@ -30,11 +30,49 @@ A lightweight HTTP/1.1 web server implementation built from scratch in Python us
 6. Response header construction with proper MIME types
 7. Binary/text file handling with appropriate encoding
 
+### Code Architecture
+
+The server separates four responsibilities so HTTP logic can be tested without
+opening a listening socket:
+
+```text
+run_server() accepts a TCP connection
+    -> handle_connection() receives request bytes and decodes them
+    -> parse_request() returns an HTTPRequest
+    -> serve_file() returns an HTTPResponse
+    -> HTTPResponse.header_bytes() serializes the status line and headers
+    -> handle_connection() sends the headers/body and closes the connection
+```
+
+- `http_request.py` parses the method, path, version, and headers. Header names
+  are stored in lowercase for case-insensitive lookup. The parser performs no
+  socket or file operations.
+- `http_response.py` defines response data and builds common headers and HTML
+  errors. Bodies are bytes, so Content-Length measures the transmitted payload.
+  The serializer adds the HTTP status line, CRLF-separated headers, and the
+  blank line before the body.
+- `static_files.py` resolves filenames, checks supported extensions, evaluates
+  conditional GET requests, reads files, and returns response data. File access
+  failures become consistently formatted 404 responses.
+- `webserver.py` owns the CLI and socket lifecycle. A connection is closed in a
+  `finally` block. Transport failures are handled here rather than interpreted
+  as missing files.
+
+This refactor preserves the current GET-only, sequential service and
+working-directory-relative file lookup. Incremental reads, strict validation,
+safe document-root containment, complete-write handling, and persistent
+connections remain future work. The current `..` replacement is not sufficient
+path traversal protection.
+
 ## Project Structure
 
 ```
 src/
-├── webserver.py          # Core HTTP server implementation
+├── __init__.py           # Allows package imports and module execution
+├── webserver.py          # CLI, listener, and connection handling
+├── http_request.py       # Request data and parsing
+├── http_response.py      # Response data, builders, and serialization
+├── static_files.py       # File resolution and static responses
 ├── index.html            # Main landing page
 ├── test.html             # Demo page
 ├── test.js               # Client-side JavaScript
@@ -56,12 +94,13 @@ src/
 
 **Default port (6789):**
 ```bash
-python src/webserver.py
+cd src
+python webserver.py
 ```
 
 **Custom port:**
 ```bash
-python src/webserver.py -p 8080
+python webserver.py -p 8080
 ```
 
 ### Access the Server
@@ -74,9 +113,14 @@ Once running, navigate to:
 ### Command-Line Options
 
 ```bash
-python src/webserver.py -h              # Display help
-python src/webserver.py -p <port>       # Specify custom port
+python webserver.py -h              # Display help (from src/)
+python webserver.py -p <port>       # Specify custom port (from src/)
 ```
+
+Files currently resolve relative to the working directory, so run from `src/`
+to serve the included demo files. From the repository root,
+`python -m src.webserver -p 8080` also starts the server, but serves files relative
+to that root. A configurable document root is the next roadmap item.
 
 ## Technical Highlights
 
@@ -102,6 +146,16 @@ python src/webserver.py -p <port>       # Specify custom port
 - Method validation (GET-only by design)
 
 ## Testing
+
+Run the automated regression tests from the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+These cover parsing, response framing, static routes, binary content, conditional
+GET, error responses, socket cleanup, a real socket round trip, and both CLI
+entry points. They use only the Python standard library.
 
 Test the server's functionality:
 
