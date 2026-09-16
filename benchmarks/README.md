@@ -50,3 +50,8 @@ than choosing a single best result.
 Run `python3 benchmarks/proxy.py`. The script starts the independent demo backend and frontend, uses four clients, persistent frontend connections, 1 KiB responses, twenty warm-up requests, and three runs of 1,000 attempts. Both cases validate identical bytes. The proxy currently opens a backend connection per exchange.
 
 Recorded median throughput was 11,934.0 requests/s direct and 4,775.1 through the proxy; median p95 was 0.615 ms direct and 1.161 ms proxied. All attempts succeeded. See `results/proxy.json`. CPU/RSS describe each named process separately, excluding the client and other service. This measures overhead for this local workload; it is not a universal ratio.
+# Cache and compression experiment
+
+Run `python3 benchmarks/cache.py`. Four persistent clients request 32 KiB of repetitive text or fixed-seed random bytes. Compare disabled storage, identity caching, and gzip caching. Twenty warm-up requests precede three runs of 1,000 attempts; every body is validated, and server CPU/RSS is sampled.
+
+Recorded mean throughput across runs: text 3,651 uncached / 4,221 cached / 4,259 gzip-cached requests/s; random 3,580 / 4,250 / 4,237. These means are rounded summaries, not guaranteed improvements. Text compressed from 32,768 to 167 bytes; random data expanded to 32,796 bytes. Gzip's bandwidth benefit depends strongly on content. See `results/cache.json` for per-run p50/p95/p99, CPU, RSS, and errors. Warm runs emphasize reuse and do not measure cold compression cost separately.
