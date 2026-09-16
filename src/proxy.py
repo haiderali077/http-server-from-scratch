@@ -7,11 +7,11 @@ from urllib.parse import quote, urlsplit
 if __package__:
     from .http_response import build_response
     from .transport import BodyStream, SocketReader
-    from .http_request import TOKEN
+    from .http_request import HTTPError, TOKEN
 else:
     from http_response import build_response
     from transport import BodyStream, SocketReader
-    from http_request import TOKEN
+    from http_request import HTTPError, TOKEN
 
 
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"}
@@ -108,6 +108,10 @@ class UpstreamBody:
         self.connection.close()
 
 
+class ProxyFailure(HTTPError):
+    pass
+
+
 class Proxy:
     def __init__(self, url, connect_timeout=2.0, response_timeout=10.0):
         if min(connect_timeout, response_timeout) <= 0:
@@ -121,6 +125,16 @@ class Proxy:
         self.authority = f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
 
     def forward(self, request, peer=None):
+        try:
+            return self._forward(request, peer)
+        except socket.timeout as error:
+            raise ProxyFailure("Upstream timed out", 504) from error
+        except (OSError, ValueError) as error:
+            if isinstance(error, HTTPError):
+                raise
+            raise ProxyFailure("Upstream connection or protocol failure", 502) from error
+
+    def _forward(self, request, peer=None):
         path = quote(request.path, safe="/!$&'()*+,;=:@-._~")
         if request.query:
             path += "?" + request.query
@@ -149,7 +163,10 @@ class Proxy:
             if chunked:
                 connection.sendall(b"0\r\n\r\n")
             reader = SocketReader(connection)
-            status, headers = response_header(reader, self.response_timeout)
+            try:
+                status, headers = response_header(reader, self.response_timeout)
+            except HTTPError as error:
+                raise ProxyFailure("Upstream header protocol failure", 502) from error
             forwarded = {name.title(): value for name, value in end_to_end_headers(headers).items() if name not in {"content-length", "server", "date"}}
             response = build_response(status, headers=forwarded)
             if "content-length" in headers and status != 204 and status != 304:

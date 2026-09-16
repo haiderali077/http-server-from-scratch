@@ -41,7 +41,12 @@ class BodyStream:
         self.chunks = chunks
         self.complete = False
     def __iter__(self):
-        yield from self.chunks
+        try:
+            yield from self.chunks
+        except socket.timeout as error:
+            raise HTTPError("Client body timed out", 408) from error
+        except OSError as error:
+            raise HTTPError("Client body disconnected", 400) from error
         self.complete = True
 
 
