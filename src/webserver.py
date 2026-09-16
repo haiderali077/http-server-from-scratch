@@ -17,6 +17,7 @@ if __package__:
     from .workers import BoundedPool
     from .application import Application
     from .events import Events
+    from .reactor import run_reactor
 else:
     from http_request import HTTPError, parse_request
     from http_response import error_response
@@ -26,17 +27,20 @@ else:
     from workers import BoundedPool
     from application import Application
     from events import Events
+    from reactor import run_reactor
 
 
 USAGE = "webserver.py [-p <port number>] [-d <document root>]"
 
 
 def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Limits(), timeouts=Timeouts(),
-                      max_requests=100, stop_event=None, application=None, events=None):
+                      max_requests=100, stop_event=None, application=None, events=None, *,
+                      reader=None, request_number=0, park=False):
     """Own one accepted socket: receive, dispatch, send, and close."""
     response_started = False
     waiting_for_idle = False
-    reader = SocketReader(connection)
+    reader = reader or SocketReader(connection)
+    parked = False
     application = application or Application(document_root)
     events = events or Events()
     request = response = None
@@ -52,7 +56,7 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
                     status=status, duration_seconds=round(time.monotonic() - started, 6),
                     upstream_seconds=upstream, outcome=outcome)
     try:
-        for number in range(max_requests):
+        for number in range(request_number, max_requests):
             request = response = None
             started = time.monotonic()
             response_started = False
@@ -97,6 +101,9 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             record(response.status, "complete")
             if not keep_alive:
                 return
+            if park:
+                parked = True
+                return reader, number + 1
     except HTTPError as error:
         events.emit("error", message=str(error), status=error.status, response_started=response_started)
         record(response.status if response_started and response else error.status, "incomplete" if response_started else "error",
@@ -134,16 +141,17 @@ def handle_connection(connection, document_root=DEFAULT_DOCUMENT_ROOT, limits=Li
             except OSError:
                 pass
     finally:
-        try:
-            connection.close()
-        except OSError:
-            pass
+        if not parked:
+            try:
+                connection.close()
+            except OSError:
+                pass
 
 
 def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=16, *,
                host="127.0.0.1", limits=Limits(), timeouts=Timeouts(), max_requests=100,
                shutdown_timeout=2.0, stop_event=None, upstream=None, proxy_options=None, access_log=None, error_log=None,
-               cache_bytes=8388608):
+               cache_bytes=8388608, mode="threads", max_connections=256):
     """Accept clients into a bounded pool; reject excess work instead of queuing forever."""
     # Resolve a relative CLI path once, before accepting any connections.
     document_root = Path(document_root).resolve()
@@ -151,6 +159,8 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
         raise ValueError("Document root must be an existing directory: {}".format(document_root))
     if min(limits) < 1 or min(timeouts) <= 0 or max_requests < 1 or shutdown_timeout < 0:
         raise ValueError("Limits, deadlines, and request counts must be positive")
+    if mode not in ("threads", "selectors") or max_connections < 1:
+        raise ValueError("Invalid connection mode or capacity")
     stop_event = stop_event or threading.Event()
     application = Application(document_root, upstream, proxy_options, cache_bytes)
     connections = set()
@@ -171,6 +181,13 @@ def run_server(port, document_root=DEFAULT_DOCUMENT_ROOT, workers=8, queue_size=
         listener.settimeout(0.2)
         print("Server is running on port", listener.getsockname()[1], flush=True)
         print("Document root:", document_root)
+        if mode == "selectors":
+            def exchange(connection, reader, number):
+                return handle_connection(connection, document_root, limits, timeouts, max_requests,
+                                         stop_event, application, events, reader=reader,
+                                         request_number=number, park=True)
+            run_reactor(listener, pool, exchange, stop_event, timeouts, shutdown_timeout, max_connections)
+            return
         try:
             while not stop_event.is_set():
                 try:
@@ -218,6 +235,8 @@ def main(argv):
     parser.add_argument("--access-log", type=Path)
     parser.add_argument("--error-log", type=Path)
     parser.add_argument("--cache-bytes", type=int, default=8388608)
+    parser.add_argument("--mode", choices=("threads", "selectors"), default="threads")
+    parser.add_argument("--max-connections", type=int, default=256)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--queue-size", type=int, default=16)
     parser.add_argument("--max-headers", type=int, default=32768)
@@ -239,7 +258,8 @@ def main(argv):
                    max_requests=args.max_requests, shutdown_timeout=args.shutdown_timeout, stop_event=stop,
                    upstream=args.upstream, proxy_options={"connect_timeout": args.upstream_connect_timeout,
                                                         "response_timeout": args.upstream_response_timeout},
-                   access_log=args.access_log, error_log=args.error_log, cache_bytes=args.cache_bytes)
+                   access_log=args.access_log, error_log=args.error_log, cache_bytes=args.cache_bytes,
+                   mode=args.mode, max_connections=args.max_connections)
     except ValueError as error:
         print(error, file=sys.stderr)
         sys.exit(2)

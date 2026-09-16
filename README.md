@@ -66,6 +66,7 @@ curl --data-binary 'backend echo' http://127.0.0.1:6789/api/echo
 | `--upstream-connect-timeout`, `--upstream-response-timeout` | 2 s connect; 10 s header/body phases |
 | `--cache-bytes` | 8 MiB shared payload budget; 0 disables storage |
 | `--access-log`, `--error-log` | Optional paths for JSON-line logs |
+| `--mode`, `--max-connections` | Default `threads`; experimental `selectors` parks idle sockets, capped at 256 |
 
 Run `python3 -m src.webserver --help` for all options. [Static cache policy](docs/CACHE.md) describes validators, eviction, and gzip eligibility.
 

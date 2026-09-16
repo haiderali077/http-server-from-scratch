@@ -1,4 +1,5 @@
 import socket
+import os
 import select
 import subprocess
 import sys
@@ -12,7 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class RunningServer:
     def __init__(self, *options):
-        self.options = options
+        mode = os.environ.get("HTTP_TEST_MODE")
+        self.options = (*options, "--mode", mode) if mode and "--mode" not in options else options
 
     def __enter__(self):
         self.directory = tempfile.TemporaryDirectory()
