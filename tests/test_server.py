@@ -149,7 +149,7 @@ class StaticFileTests(unittest.TestCase):
         self.assertEqual(response.headers["Allow"], "GET, HEAD")
 
     def test_query_does_not_change_static_file_lookup(self):
-        response = self.serve(self.request("/café.html?download=1"))
+        response = self.serve(self.request("/caf%C3%A9.html?download=1"))
         self.assertEqual(response.status, 200)
         self.assertEqual(response.body, b"encoded path")
 
